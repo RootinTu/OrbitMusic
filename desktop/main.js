@@ -399,6 +399,9 @@ async function createWindow() {
   mainWindow.on('show', () => emitVisualActivity(true));
   mainWindow.on('closed', () => { mainWindow = null; });
   await mainWindow.loadURL(appUrl);
+  // HTML-in-Canvas can finish loading without emitting ready-to-show while
+  // the initial window is hidden. Do not leave a running app with no window.
+  revealMainWindow();
 }
 
 ipcMain.handle('orbit-open-qq-login', (event) => openQQMusicLoginWindow(BrowserWindow.fromWebContents(event.sender)));
