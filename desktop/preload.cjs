@@ -29,5 +29,6 @@ contextBridge.exposeInMainWorld('orbitDesktop', {
 
 window.addEventListener('DOMContentLoaded', () => {
   document.documentElement.classList.add('desktop-shell-root');
+  if (process.platform === 'win32') document.documentElement.classList.add('windows-custom-title');
   document.body.classList.add('desktop-shell');
 });

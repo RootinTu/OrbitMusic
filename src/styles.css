@@ -213,3 +213,102 @@ dialog{width:min(760px,90vw);padding:0;border:1px solid #ffffff30;border-radius:
 #toast{bottom:calc(145px + var(--safe-bottom))}.card{width:139px;height:169px}.side-label,.coordinates{display:none}main{height:calc(var(--app-vh,100dvh) - 78px - var(--safe-top))}.player{left:4%;width:92%;bottom:calc(16px + var(--safe-bottom));height:118px;padding:12px 14px 22px;border-radius:20px;grid-template-columns:1.1fr 1fr;gap:8px}.now{gap:9px}.now-art{height:43px;width:43px;flex-basis:43px;border-radius:8px}.now-title{font-size:12px;margin-bottom:4px}.now-sub{font-size:7.5px;letter-spacing:0;max-width:130px;white-space:normal;line-height:1.5}.favorite{display:none}.transport{gap:8px}.transport .secondary{display:none}.play{height:35px;width:35px}.timeline{position:absolute;bottom:10px;left:16px;right:16px}.timeline time{font-size:8px}.universe-footer{bottom:139px;justify-content:flex-start;padding-left:7%}.drag-hint{font-size:10px;gap:8px;padding:0}.view-controls{right:5%}.view-controls button{width:29px}.view-controls span{margin-left:0;margin-right:0}#journal-view{height:calc(var(--app-vh,100dvh) - 78px - var(--safe-top));padding:25px 7% 160px}.journal-heading h1{font-size:30px}#journal-grid{grid-template-columns:1fr 1fr;gap:20px}.journal-card h2{font-size:16px}.journal-card p{font-size:11px}.journal-card>span:not(.journal-art){font-size:8px}dialog[open]{display:block;max-height:85dvh;overflow:auto}.detail-art{height:210px;min-height:0}.detail-art .art-image{padding:12px}.detail-copy{padding:24px}.detail-copy h2{font-size:27px;margin:12px 0}.detail-copy p{font-size:13px}.close{background:#0006;border-radius:50%;width:32px;line-height:32px;color:white}#toast{font-size:11px;white-space:nowrap}}
 @media(prefers-reduced-transparency:reduce){.glass{background:#29292e;backdrop-filter:none;-webkit-backdrop-filter:none}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* One complete live backdrop, with separate panel, capsule and title materials. */
+.glass-backdrop-mount,.glass-scene-content{display:contents}
+.glass-backdrop-mount.is-full-dom{display:block;position:fixed;inset:0;z-index:0}
+.full-dom-glass-canvas{display:block;width:100%;height:100%}
+.glass-scene-content.is-canvas-content{display:block;width:100vw;height:var(--app-vh,100dvh);background:#101113;overflow:hidden}
+/* Ambient sky glow extends behind the top capsules so liquid-dom always has soft tonal gradients to refract. */
+.ambient{background:radial-gradient(ellipse 68% 42% at 50% 6%,#9aa6be16,transparent 68%),radial-gradient(ellipse 76% 32% at 50% 98%,#8ea0be18,transparent 70%),radial-gradient(ellipse at 55% 45%,#6e70721a,transparent 60%)}
+/* Browser fallback approximates liquid-dom optics (bezel speculars + inner refraction) without hard CSS borders. */
+.orbit-glass-surface{--glass-blur:20px;--glass-saturation:1.65;position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;overflow:hidden;border:0;background:linear-gradient(128deg,#eef5ff1c 0%,#ffffff07 36%,#dce9ff06 66%,#ffffff16 100%);backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-saturation)) contrast(1.04) brightness(1.1);-webkit-backdrop-filter:blur(var(--glass-blur)) saturate(var(--glass-saturation)) contrast(1.04) brightness(1.1);box-shadow:inset 0 0 0 1px #ffffff24,inset 0 1.5px 1px #ffffff5c,inset 0 -1.5px 1px #bcd4ff2e,inset 14px 0 24px -22px #ffffff75,inset -14px 0 24px -22px #d7e7ff66,0 14px 36px #0005;transition:opacity .22s ease,filter .22s ease,box-shadow .22s ease}
+.orbit-glass-surface::before,.orbit-glass-surface::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;transition:opacity .22s ease}
+.orbit-glass-surface::before{background:radial-gradient(ellipse 88% 28% at 16% 0%,#ffffff75,transparent 70%),radial-gradient(ellipse 72% 24% at 92% 100%,#b8d2ff4d,transparent 74%);opacity:.75}
+.orbit-glass-surface::after{background:linear-gradient(135deg,#ffffff1a 0%,transparent 28% 72%,#d7e7ff18 100%);opacity:.7}
+.orbit-glass-surface.is-control{--glass-blur:13px;--glass-saturation:1.72;box-shadow:inset 0 0 0 1px #ffffff2b,inset 0 1px 1px #ffffff6e,inset 0 -1px 1px #c3d8ff36,0 10px 24px #0004}
+.orbit-glass-surface.is-subtle{--glass-blur:6px;--glass-saturation:1.25;background:linear-gradient(115deg,#ffffff0a,transparent 68%,#e2edff06);box-shadow:inset 0 -1px 0 #ffffff10}
+.is-subtle.orbit-glass-surface::before,.is-subtle.orbit-glass-surface::after{opacity:.3}
+.liquid-control:hover>.orbit-glass-surface:not(.is-liquid-dom){filter:brightness(1.14)}
+.liquid-control:hover>.orbit-glass-surface:not(.is-liquid-dom)::before{opacity:1}
+.orbit-glass-surface.is-liquid-dom{border:0;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}
+.orbit-glass-surface.is-liquid-dom::before,.orbit-glass-surface.is-liquid-dom::after{display:none}
+.player.refractive-player{isolation:isolate;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;border:0;left:50%;transform:translateX(-50%);width:min(880px,86vw);height:68px;bottom:calc(20px + var(--safe-bottom));padding:8px 16px 8px 12px;border-radius:999px;grid-template-columns:minmax(0,1fr) minmax(270px,1.15fr) minmax(0,.88fr);gap:14px;box-shadow:0 14px 36px #0005;color:#f3f3f5}
+.player.refractive-player::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:-1;box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 0 rgba(190,214,255,.1)}
+.windows-custom-title{--safe-top:38px}
+.desktop-titlebar{position:fixed;left:0;right:0;top:0;height:38px;z-index:1000;display:flex;align-items:center;gap:9px;padding:0 152px 0 14px;isolation:isolate;-webkit-app-region:drag;app-region:drag;user-select:none;color:#e3e5e9;font-size:11px;letter-spacing:.5px;border:0}
+.desktop-titlebar img{width:22px;height:22px;pointer-events:none}
+.desktop-brand-note{font-size:10px;color:#8e929c;letter-spacing:1.2px;border-left:1px solid #ffffff22;margin-left:2px;padding-left:10px;font-weight:400;white-space:nowrap}
+.desktop-title-track{margin-left:10px;padding-left:14px;border-left:1px solid #ffffff16;color:#b4b8c1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-spacer{width:1px;height:1px;pointer-events:none}
+.liquid-control{isolation:isolate;border:0!important;box-shadow:0 6px 20px #0002;background:transparent!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;color:#e3e5e9;transition:transform .2s cubic-bezier(.22,.8,.24,1),color .2s ease}
+button.liquid-control{position:relative}
+button.liquid-control:hover{color:#fff}
+button.liquid-control:active{transform:scale(.97)}
+.playlist-toggle.liquid-control,.bridge-launch.liquid-control,.version-chip.liquid-control{min-height:36px;padding:0 14px;border-radius:999px;display:inline-flex;align-items:center;gap:8px;font-size:12px}
+.bridge-launch.liquid-control{font-size:11px;letter-spacing:.9px}
+.version-chip.liquid-control{padding-inline:12px;font-size:10.5px;letter-spacing:.6px}
+.liquid-panel{isolation:isolate;border:0!important;background:transparent!important;box-shadow:0 14px 34px #0004;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+.playlist-menu.liquid-panel,.output-menu.liquid-panel{padding:0;overflow:visible;border-radius:18px}
+.playlist-menu-content{padding:6px;max-height:inherit;overflow:auto;border-radius:inherit;scrollbar-width:thin;scrollbar-color:#ffffff28 transparent}
+.output-menu-content{display:flex;flex-direction:column;gap:2px;padding:12px;max-height:inherit;overflow:auto;border-radius:inherit;scrollbar-width:thin;scrollbar-color:#ffffff28 transparent}
+.player-reveal.liquid-control{position:fixed;height:36px;padding:0 16px;color:#e3e5e9}
+.player-reveal.liquid-control:hover{color:#fff}
+.universe-footer{position:fixed;bottom:102px}.coordinates{bottom:148px}.view-controls.liquid-control{position:absolute;right:3.5%;padding:4px;border-radius:999px}
+nav.liquid-control{padding:4px;gap:4px;border-radius:999px}
+nav.liquid-control> .orbit-glass-surface{margin:0}
+nav.liquid-control button{height:34px;padding:0 20px;color:#d6d8e0;border-radius:999px;font-size:13.5px}
+nav.liquid-control .active{color:#fff;background:linear-gradient(180deg,#ffffff28,#ffffff12);box-shadow:inset 0 1px 0 #ffffff48,0 4px 12px #0003}
+nav.liquid-control button:hover:not(.active){color:#fff;background:#ffffff14}
+nav.liquid-control span,.liquid-control .playlist-toggle-count{color:#b4b8c1}
+.liquid-control .live-dot{background:#e1e5eb;box-shadow:none}
+.liquid-control.netease-launch .live-dot{background:#ef6572;box-shadow:0 0 8px #ef6572aa}
+.refractive-player .now{gap:10px}
+.refractive-player .now-art{width:44px;height:44px;flex:0 0 44px;border-radius:50%}
+.refractive-player .now-art .art-image{padding:0;object-fit:cover}
+.refractive-player .now-title{font-size:13.5px;font-weight:500;margin-bottom:2px;color:#f5f6f8}
+.refractive-player .now-sub{font-size:10px;color:#c2c6d0}
+.refractive-player .favorite{margin-left:2px;width:28px;height:28px}
+.refractive-player .transport{gap:13px}
+.refractive-player .secondary{font-size:18px}
+.refractive-player .icon{width:29px;height:29px;border-radius:50%;color:#eef0f5;transition:background .2s ease,color .2s ease,transform .2s ease}
+.refractive-player .icon svg{width:16px;height:16px}
+.refractive-player .icon:hover{background:#ffffff18;color:#fff}
+.refractive-player .play{width:34px;height:34px;border-radius:50%;color:#fff;background:radial-gradient(circle at 32% 28%,#ffffff34,#ffffff0e 72%);box-shadow:inset 0 1px 0 #ffffff58,0 4px 14px #0004}
+.refractive-player .play::after{width:34px;height:34px;margin:-17px 0 0 -17px}
+.refractive-player .play:hover{background:radial-gradient(circle at 32% 28%,#ffffff44,#ffffff18 72%);transform:scale(1.07)}
+.refractive-player .play svg{width:18px;height:18px;filter:drop-shadow(0 0 calc(4px + var(--beat,0)*8px) #ffffff75)}
+.refractive-player .timeline{margin-top:2px;gap:8px}
+.refractive-player .timeline time{font-size:9.5px;color:#c2c6d0}
+.refractive-player .timeline input[type=range]{height:14px}
+.refractive-player .player-right{gap:4px}
+.refractive-player .player-right>span{display:none}
+.refractive-player .player-right input{width:50px;height:16px}
+.refractive-player .quality-btn{height:26px;padding:0 10px;border-radius:999px;border:0;color:#f2f3f6;background:#ffffff16;box-shadow:inset 0 1px 0 #ffffff2c;font-size:9.5px;letter-spacing:1px}
+.refractive-player .quality-btn:hover,.refractive-player .quality-btn.on{background:#ffffff28;color:#fff}
+.refractive-player .note-icon,.refractive-player .collapse-btn{border-left:0;padding-left:0;margin-left:2px;width:29px;font-size:19px}
+.refractive-player .output-menu{color:#f3f3f5}
+/* Keep terrain/covers continuous behind the desktop header and Windows caption.
+   Only the reading areas reserve header space; the background fills the viewport. */
+@media(min-width:901px){
+  :root{--desktop-header-height:100px}
+  header{position:fixed;inset:0 0 auto;background:linear-gradient(#1011130d,transparent)}
+  #universe{height:var(--app-vh,100dvh)}
+  .intro{top:calc(var(--safe-top) + var(--desktop-header-height) + 3.5dvh)}
+  #journal-view{height:var(--app-vh,100dvh);padding-top:calc(var(--safe-top) + var(--desktop-header-height) + 25px)}
+}
+@media(min-width:901px) and (max-width:1000px){:root{--desktop-header-height:85px}}
+@media(min-width:901px) and (max-width:1250px){
+  header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:12px}
+  header .brand-note{display:none}
+  header nav{position:relative;left:auto;right:auto;transform:none;justify-self:center}
+  header nav button{padding-inline:14px;font-size:12px}
+  .header-right{margin-left:0;gap:8px}
+  .header-right .edition{gap:8px}
+  .header-right .playlist-switch{max-width:150px}
+}
+@media(max-width:900px){.player.refractive-player{left:4%;transform:none;width:92%;bottom:calc(16px + var(--safe-bottom));border-radius:22px;height:118px;padding:12px 14px 22px}.universe-footer{bottom:139px}}
+@media(prefers-reduced-transparency:reduce){.orbit-glass-surface{background:#292b30;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}.orbit-glass-surface::before,.orbit-glass-surface::after{display:none}}
+html[data-glass-renderer="full-dom"] header{background:none}
+html[data-glass-renderer="full-dom"] :is(.liquid-control,.liquid-panel,.player.refractive-player){box-shadow:none}
+html[data-glass-renderer="full-dom"] button.liquid-control:hover{background:#ffffff0d!important}

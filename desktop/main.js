@@ -25,6 +25,9 @@ let downloadedInstallerPath = '';
 let downloadedInstallerVersion = '';
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+// liquid-dom's live DOM texture source (cards, lyrics and WebGL together).
+// This enables the rendering API only; normal Chromium security stays enabled.
+app.commandLine.appendSwitch('enable-blink-features', 'CanvasDrawElement');
 // 保留 Chromium 默认硬件加速，让 Windows 自己选择集显/独显；兼容性不佳时交给
 // 现有 WebGL 回退处理，避免播放器仅在后台也强制唤醒高性能显卡。
 app.setName('ORBIT Music');
@@ -362,6 +365,10 @@ async function createWindow() {
     show: false,
     autoHideMenuBar: true,
     title: 'ORBIT Music',
+    ...(process.platform === 'win32' ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { color: '#00000000', symbolColor: '#e5e7eb', height: 38 },
+    } : {}),
     backgroundColor: '#101113',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -373,6 +380,18 @@ async function createWindow() {
       backgroundThrottling: true,
     },
   });
+  if (process.platform === 'win32') {
+    const relaunchPath = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+    mainWindow.setAppDetails({
+      appId: 'com.orbit.music.desktop',
+      // Windows Shell cannot resolve an icon inside app.asar. The packaged
+      // executable already embeds the same ORBIT icon as a native resource.
+      appIconPath: app.isPackaged ? relaunchPath : path.join(__dirname, 'icons', 'orbit.ico'),
+      appIconIndex: 0,
+      relaunchCommand: `"${relaunchPath}"`,
+      relaunchDisplayName: 'ORBIT Music',
+    });
+  }
   mainWindow.on('ready-to-show', () => mainWindow?.show());
   mainWindow.on('minimize', () => emitVisualActivity(false));
   mainWindow.on('hide', () => emitVisualActivity(false));

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { tracks } from './tracks.js';
 import { ensureLrc, findLrcIndex, invalidateLrc, prefetchLrc, waitForLrc } from './lyrics.js';
 import LrcLine from './LrcLine.jsx';
+import GlassSurface from './GlassSurface.jsx';
+import GlassBackdrop from './GlassBackdrop.jsx';
 import QQBridge from './QQBridge.jsx';
 import NeteaseBridge from './NeteaseBridge.jsx';
 import {
@@ -16,6 +18,7 @@ import {
 import { BeatEngine } from './beatEngine.js';
 import { OUTPUT_MODES, applySink, clearPlaybackMemory, listOutputs, readBeatOffset, readLastTrack, readOutputPref, requestDeviceLabels, resumeAt, saveBeatOffset, saveLastTrack, saveOutputPref, saveProgress } from './audioOut.js';
 import { createTerrainGL } from './terrainGL.js';
+import { fitCardSphere, projectCardY } from './sphereLayout.js';
 
 const IS_DESKTOP_APP = Boolean(window.orbitDesktop?.isDesktop)
   || (import.meta.env.DEV && new URLSearchParams(location.search).has('desktop-preview'));
@@ -225,13 +228,16 @@ function PlaylistSwitch({ playlists, activePlaylist, onSwitchPlaylist }) {
   if (!playlists.length) return null;
   return (
     <div className="playlist-switch" ref={rootRef}>
-      <button className="playlist-toggle glass" onClick={() => setOpen(value => !value)} aria-expanded={open} aria-haspopup="listbox" title={active?.name || '选择歌单'}>
+      <button className="playlist-toggle glass liquid-control" onClick={() => setOpen(value => !value)} aria-expanded={open} aria-haspopup="listbox" title={active?.name || '选择歌单'}>
+        <GlassSurface control />
         <span className="playlist-toggle-label">{active?.name || '选择歌单'}</span>
         <span className="playlist-toggle-count">{active?.count ?? 0} 首</span>
         <svg className={`playlist-chev ${open ? 'open' : ''}`} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
       </button>
       {open && (
-        <div className="playlist-menu glass" role="listbox" aria-label="歌单列表">
+        <div className="playlist-menu glass liquid-panel" role="listbox" aria-label="歌单列表">
+          <GlassSurface variant="player" />
+          <div className="playlist-menu-content">
           {playlists.map(playlist => (
             <button
               key={playlist.id}
@@ -247,6 +253,7 @@ function PlaylistSwitch({ playlists, activePlaylist, onSwitchPlaylist }) {
               {playlist.id === activePlaylist && <b>播放中</b>}
             </button>
           ))}
+          </div>
         </div>
       )}
     </div>
@@ -389,21 +396,24 @@ function useUpdater() {
 function Header({ journal, onChangeView, onOpenBridge, onOpenNetease, qqCount, neteaseCount, playlists, activePlaylist, onSwitchPlaylist, updater }) {
   return (
     <header>
-      <a className="brand" href="./" aria-label="ORBIT 首页">
-        <Icon name="orbit" />ORBIT<span className="brand-note">私人音乐频率</span>
-      </a>
-      <nav className="glass" aria-label="视图切换">
+      {window.orbitDesktop?.platform !== 'win32' ? (
+        <a className="brand" href="./" aria-label="ORBIT 首页">
+          <Icon name="orbit" />ORBIT<span className="brand-note">私人音乐频率</span>
+        </a>
+      ) : <span className="brand-spacer" aria-hidden="true" />}
+      <nav className="glass liquid-control" aria-label="视图切换">
+        <GlassSurface control />
         <button className={journal ? '' : 'active'} onClick={() => onChangeView(false)}>音乐宇宙</button>
         <button className={journal ? 'active' : ''} onClick={() => onChangeView(true)}>听觉手记 <span>{tracks.length}</span></button>
       </nav>
       <div className="header-right">
         <PlaylistSwitch playlists={playlists} activePlaylist={activePlaylist} onSwitchPlaylist={onSwitchPlaylist} />
         <div className="edition">
-          <button className="bridge-launch" onClick={onOpenBridge}><span className="live-dot" /> QQ 音乐桥{qqCount ? ` · ${qqCount}` : ''}</button>
-          <button className="bridge-launch netease-launch" onClick={onOpenNetease}><span className="live-dot" /> 网易云{neteaseCount ? ` · ${neteaseCount}` : ''}</button>
+          <button className="bridge-launch liquid-control" onClick={onOpenBridge}><GlassSurface control /><span className="live-dot" /> QQ 音乐桥{qqCount ? ` · ${qqCount}` : ''}</button>
+          <button className="bridge-launch netease-launch liquid-control" onClick={onOpenNetease}><GlassSurface control /><span className="live-dot" /> 网易云{neteaseCount ? ` · ${neteaseCount}` : ''}</button>
           <span>/</span>
           {updater.supported
-            ? <button className="version-chip" onClick={updater.check} title="检查更新">{updater.version ? `v${updater.version}` : '更新'}</button>
+            ? <button className="version-chip liquid-control" onClick={updater.check} title="检查更新"><GlassSurface control />{updater.version ? `v${updater.version}` : '更新'}</button>
             : 'SEP 2026'}
         </div>
       </div>
@@ -575,7 +585,7 @@ function makeCardCoordinates() {
   return result;
 }
 
-function Universe({ current, playing, currentTime, duration, onSelect, zoom, backdropMode, onBackdrop, onRotateToast, onZoom, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge }) {
+function Universe({ current, playing, currentTime, duration, onSelect, zoom, backdropMode, onRotateToast, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge }) {
   const universeRef = useRef(null);
   const canvasRef = useRef(null);
   const glCanvasRef = useRef(null);
@@ -649,14 +659,21 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
     let revealCardsUntil = 0;
     let viewportWidth = Math.max(1, universe.clientWidth);
     let viewportHeight = Math.max(1, universe.clientHeight);
+    let sphereLayoutDirty = true;
+    let sphereLayout;
+    let sphereAnchorX = 0, sphereAnchorY = 0;
+    let layoutZoom;
     const cardFrameCache = [];
     const resizeObserver = new ResizeObserver(entries => {
       const rect = entries[0]?.contentRect;
       if (!rect) return;
       viewportWidth = Math.max(1, rect.width);
       viewportHeight = Math.max(1, rect.height);
+      sphereLayoutDirty = true;
     });
     resizeObserver.observe(universe);
+    const layoutObserver = new MutationObserver(() => { sphereLayoutDirty = true; });
+    layoutObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
     const focusTrack = id => {
       const card = coordinates.find(item => item.track.id === id);
@@ -1440,9 +1457,25 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       const isPlaying = propsRef.current.playing;
       const revealingCards = dragging || performance.now() < revealCardsUntil;
       const gpuBackdrop = propsRef.current.backdropMode === 4 && !mobile;
-      // 移动端屏幕窄，不能沿用桌面的下限，否则卡片会被推出可视区
-      const radiusX = Math.max(width * 0.3, mobile ? 140 : 300) * propsRef.current.zoom;
-      const radiusY = Math.max((height - 130) * (mobile ? 0.3 : 0.4), mobile ? 140 : 200) * propsRef.current.zoom;
+      if (sphereLayoutDirty || layoutZoom !== propsRef.current.zoom) {
+        const rect = universe.getBoundingClientRect();
+        const firstCard = cardRefs.current.find(Boolean);
+        const header = document.querySelector('header')?.getBoundingClientRect();
+        const titlebar = document.querySelector('.desktop-titlebar')?.getBoundingClientRect();
+        const player = document.querySelector('.player, .player-reveal')?.getBoundingClientRect();
+        sphereLayout = fitCardSphere({ width, height,
+          cardWidth: firstCard?.offsetWidth || 194, cardHeight: firstCard?.offsetHeight || 233,
+          top: mobile ? Math.max(0, (header?.bottom || rect.top) - rect.top) + 12
+            : Math.max(12, (titlebar?.bottom ?? rect.top) - rect.top + 8),
+          bottom: mobile ? Math.min(height, (player?.top ?? rect.bottom) - rect.top) - 12 : height - 12,
+          zoom: propsRef.current.zoom, mobile,
+        });
+        sphereAnchorX = firstCard?.offsetLeft ?? width / 2;
+        sphereAnchorY = firstCard?.offsetTop ?? height * .42;
+        layoutZoom = propsRef.current.zoom;
+        sphereLayoutDirty = false;
+      }
+      const { radiusX } = sphereLayout;
       coordinates.forEach((card, index) => {
         const element = cardRefs.current[index];
         if (!element) return;
@@ -1460,8 +1493,8 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         const depth = y * Math.sin(tilt) + z * Math.cos(tilt);
         const active = card.track.id === currentTrack && isPlaying;
         // 正在播的那张卡片跟着节拍一起呼吸
-        const scale = (0.36 + (depth + 1) * 0.31) * (active ? 1.05 + beatPulse * 0.045 : 1);
-        setStyle('transform', `translate3d(-50%,-50%,0) translate3d(${(x * radiusX).toFixed(2)}px,${(projectedY * radiusY + (mobile ? 45 : 10)).toFixed(2)}px,0) scale(${scale.toFixed(4)}) rotateY(${(x * -16).toFixed(2)}deg) rotateZ(${(x * projectedY * 5).toFixed(2)}deg)`);
+        const scale = (0.36 + (depth + 1) * 0.31) * (active ? 1.05 + beatPulse * 0.045 : 1) * sphereLayout.scale;
+        setStyle('transform', `translate3d(-50%,-50%,0) translate3d(${(x * radiusX + sphereLayout.centerX - sphereAnchorX).toFixed(2)}px,${(projectCardY(sphereLayout, projectedY, scale) + sphereLayout.centerY - sphereAnchorY).toFixed(2)}px,0) scale(${scale.toFixed(4)}) rotateY(${(x * -16).toFixed(2)}deg) rotateZ(${(x * projectedY * 5).toFixed(2)}deg)`);
         if (active && !dragging) {
           setStyle('boxShadow', `0 12px 35px #0008, 0 0 0 2px #ffffff3d, 0 0 ${(16 + beatPulse * 34).toFixed(1)}px rgba(255,255,255,${(0.06 + beatPulse * 0.2).toFixed(3)})`);
           element.dataset.glow = '1';
@@ -1640,7 +1673,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
     universe.addEventListener('selectstart', preventSelection);
     universe.addEventListener('dragstart', preventSelection);
     universe.addEventListener('keydown', onKeyDown);
-    universe.querySelector('#rotate')?.addEventListener('click', toggleRotate);
+    document.getElementById('rotate')?.addEventListener('click', toggleRotate);
     document.addEventListener('visibilitychange', onVisibilityChange);
     if (visualsActive) animationFrame = requestAnimationFrame(animate);
     return () => {
@@ -1649,6 +1682,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       document.removeEventListener('visibilitychange', onVisibilityChange);
       stopDesktopVisualListener?.();
       resizeObserver.disconnect();
+      layoutObserver.disconnect();
       // 离开宇宙视图时把节拍值归零，免得停在某一帧的亮度上
       document.getElementById('lyrics-panel')?.style.setProperty('--beat', '0');
       playerElement?.style.setProperty('--beat', '0');
@@ -1659,7 +1693,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       universe.removeEventListener('selectstart', preventSelection);
       universe.removeEventListener('dragstart', preventSelection);
       universe.removeEventListener('keydown', onKeyDown);
-      universe.querySelector('#rotate')?.removeEventListener('click', toggleRotate);
+      document.getElementById('rotate')?.removeEventListener('click', toggleRotate);
     };
   }, [analysisRef, coordinates, onRotateToast]);
 
@@ -1703,14 +1737,6 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       </div>
       <div className="side-label">ORBIT · USER IMPORTED MUSIC ARCHIVE</div>
       <div className="coordinates">{IS_DESKTOP_APP ? 'USER IMPORTED AUDIO' : 'FULL LOCAL AUDIO'}<br />{tracks.length} TRACKS</div>
-      <div className="universe-footer">
-        <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
-        <div className="view-controls glass">
-          <button onClick={onBackdrop} aria-label={`切换背景：${backdropNames[backdropMode]}`} title={`切换背景：${backdropNames[backdropMode]}`}>✦</button>
-          <span /><button id="rotate" aria-label="暂停自动旋转" title="暂停自动旋转">◉</button>
-          <span /><button onClick={() => onZoom(-0.1)} aria-label="缩小">−</button><button onClick={() => onZoom(0.1)} aria-label="放大">＋</button>
-        </div>
-      </div>
     </main>
   );
 }
@@ -1753,13 +1779,15 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
   };
   if (hidden) {
     return (
-      <button className="player-reveal glass" onClick={() => onHiddenChange(false)} aria-label="展开播放栏" title="展开播放栏">
+      <button className="player-reveal glass liquid-control" onClick={() => onHiddenChange(false)} aria-label="展开播放栏" title="展开播放栏">
+        <GlassSurface variant="control" />
         <Icon name="chevron" className="reveal-chev" /><small>{playing ? '播放中' : '播放栏'}</small>
       </button>
     );
   }
   return (
-    <footer className="player glass">
+    <footer className="player glass refractive-player">
+      <GlassSurface variant="player" />
       <div className="now">
         <LiquidArt src={track.cover} alt={`${track.album} 专辑封面`} className="now-art" />
         <div className="now-copy">
@@ -1823,7 +1851,9 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
         <div className="output-wrap">
           <button className={`icon output-btn ${outputMenu ? 'on' : ''}`} onClick={onOutputToggle} aria-label="律动与音频输出设置" aria-expanded={outputMenu} title="律动 / 输出"><Icon name="pulse" /></button>
           {outputMenu && (
-            <div className="output-menu glass" role="menu">
+            <div className="output-menu glass liquid-panel" role="menu">
+              <GlassSurface variant="player" />
+              <div className="output-menu-content">
               <div className="output-head">音频输出</div>
               {Object.entries(OUTPUT_MODES).map(([mode, info]) => (
                 <button key={mode} className={`output-item ${outputPref.mode === mode ? 'on' : ''}`} role="menuitemradio" aria-checked={outputPref.mode === mode} onClick={() => onOutputPick({ mode })}>
@@ -1849,6 +1879,7 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
                 <button onClick={() => onBeatOffset(0.02)} aria-label="画面延后 20 毫秒">+</button>
               </div>
               <div className="output-empty">画面比鼓点早就把 ＋ 点几下；画面慢半拍就点 −。蓝牙耳机通常要补 100~200ms。</div>
+              </div>
             </div>
           )}
         </div>
@@ -1864,7 +1895,9 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
               {qualityOption?.short || '音质'}
             </button>
             {qualityOpen && (
-              <div className="output-menu quality-menu" role="menu">
+              <div className="output-menu quality-menu glass liquid-panel" role="menu">
+                <GlassSurface variant="player" />
+                <div className="output-menu-content">
                 <div className="output-head">QQ 音质</div>
                 {QQ_QUALITY_OPTIONS.map(option => (
                   <button
@@ -1880,6 +1913,7 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
                   </button>
                 ))}
                 <div className="output-empty">高规格需要对应会员权限，拿不到时会自动降级到可用的一档。</div>
+                </div>
               </div>
             )}
           </div>
@@ -2548,6 +2582,15 @@ export default function App() {
   return (
     <>
       <SvgDefs />
+      {window.orbitDesktop?.platform === 'win32' && (
+        <div className="desktop-titlebar">
+          <GlassSurface variant="subtle" />
+          <img src="/icons/orbit-32.png" alt="" draggable="false" />
+          <span>ORBIT</span>
+          <span className="desktop-brand-note">私人音乐频率</span>
+          <span className="desktop-title-track">{track ? `${track.title} · ${track.artist}` : '音乐宇宙'}</span>
+        </div>
+      )}
       <Header
         journal={journal}
         onChangeView={setJournal}
@@ -2561,7 +2604,7 @@ export default function App() {
         updater={updater}
       />
       <UpdateBadge updater={updater} />
-      {journal ? <Journal onOpen={setSelected} /> : (
+      <GlassBackdrop>{journal ? <Journal onOpen={setSelected} /> : (
         <Universe
           current={current}
           playing={playing}
@@ -2570,21 +2613,29 @@ export default function App() {
           onSelect={selectTrack}
           zoom={zoom}
           backdropMode={backdropMode}
-          onBackdrop={() => {
-            // 移动端不进入 WebGL 声波地形，点按时只在前四种轻量模式里循环。
-            const modeCount = canUseTerrainGL() ? backdropNames.length : 4;
-            const next = (backdropMode + 1) % modeCount;
-            setBackdropMode(next);
-            showToast(`背景已切换为「${backdropNames[next]}」`);
-          }}
           onRotateToast={showToast}
-          onZoom={amount => setZoom(value => clamp(value + amount, 0.65, 1.35))}
           analysisRef={analysisRef}
           audioRef={audioRef}
           libraryVersion={libraryVersion}
           lyricsVersion={lyricsVersion}
           onOpenBridge={() => setQQBridgeOpen(true)}
         />
+      )}</GlassBackdrop>
+      {!journal && (
+        <div className="universe-footer">
+          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
+          <div className="view-controls glass liquid-control">
+            <GlassSurface variant="control" />
+            <button onClick={() => {
+              const modeCount = canUseTerrainGL() ? backdropNames.length : 4;
+              const next = (backdropMode + 1) % modeCount;
+              setBackdropMode(next);
+              showToast(`背景已切换为「${backdropNames[next]}」`);
+            }} aria-label={`切换背景：${backdropNames[backdropMode]}`} title={`切换背景：${backdropNames[backdropMode]}`}>✦</button>
+            <span /><button id="rotate" aria-label="暂停自动旋转" title="暂停自动旋转">◉</button>
+            <span /><button onClick={() => setZoom(value => clamp(value - 0.1, 0.65, 1.35))} aria-label="缩小">−</button><button onClick={() => setZoom(value => clamp(value + 0.1, 0.65, 1.35))} aria-label="放大">＋</button>
+          </div>
+        </div>
       )}
       {track && <Player
         track={track}

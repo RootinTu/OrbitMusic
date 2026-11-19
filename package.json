@@ -1,7 +1,7 @@
 {
   "name": "orbit-music",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "ORBIT liquid-glass music universe with QQ Music and Netease Cloud Music bridges",
   "author": "ORBIT Music",
   "type": "module",
@@ -19,6 +19,7 @@
     "fix-release": "node scripts/fix-release.mjs"
   },
   "dependencies": {
+    "@liquid-dom/core": "0.1.1",
     "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "react": "^19.3.0",
@@ -53,19 +54,25 @@
     ],
     "win": {
       "icon": "desktop/icons/orbit.ico",
+      "artifactName": "ORBIT-Music-${version}-${arch}.${ext}",
       "target": [
         "nsis",
-        "portable"
+        "portable",
+        "zip"
       ],
       "signAndEditExecutable": true
     },
     "nsis": {
+      "artifactName": "ORBIT-Music-Setup-${version}-${arch}.${ext}",
       "installerIcon": "desktop/icons/orbit.ico",
       "uninstallerIcon": "desktop/icons/orbit.ico",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "shortcutName": "ORBIT Music"
+    },
+    "portable": {
+      "artifactName": "ORBIT-Music-${version}-${arch}-portable.${ext}"
     }
   }
 }

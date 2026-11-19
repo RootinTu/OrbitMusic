@@ -10,6 +10,8 @@
  * 实测这个失败是恒定的，不是杀毒软件偶发扫描。把输出挪出工作区即可绕过。
  *
  * 因此这里用 os.tmpdir() 覆盖 directories.output，而不是写死 release/。
+ * 工作区还可能向 EXE 继承 Low 完整性标签，造成 NSIS 临时写入失败或
+ * Electron 静默退出。测试时直接运行工作区外的原始产物，不复制回 release/。
  */
 import os from 'node:os';
 import path from 'node:path';
@@ -19,7 +21,7 @@ import { spawn } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const { build, Platform } = require('electron-builder');
 
-const outputDir = path.join(os.tmpdir(), 'orbit-build');
+const outputDir = process.env.ORBIT_BUILD_OUTPUT || path.join(os.tmpdir(), 'orbit-build');
 
 // electron-builder 只识别 GH_TOKEN/GITHUB_TOKEN；日常 git push 则通常由
 // Windows Git Credential Manager 代管。两边原本互不相通，会出现代码能推送、
@@ -52,7 +54,7 @@ if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
 console.log(`[release] 输出目录（工作区外）：${outputDir}`);
 
 await build({
-  targets: Platform.WINDOWS.createTarget(['nsis', 'portable']),
+  targets: Platform.WINDOWS.createTarget(['nsis', 'portable', 'zip']),
   config: {
     directories: { output: outputDir },
   },
