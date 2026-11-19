@@ -47,13 +47,21 @@ test('a short window scales the cards while retaining a nonzero draggable sphere
 });
 
 test('desktop pole cards fill the vertical bounds at their actual depth scale without clipping', () => {
-  const l=fitCardSphere({width:1480,height:1000,cardWidth:194,cardHeight:233,count:30,top:130,bottom:910});
-  for (const scale of [.36,.67,.98,1.078]) for(let i=0;i<=100;i++) {
-    const actualScale=scale*l.scale;
-    const half=l.halfHeight*actualScale/(l.scale*1.1);
-    const y=projectCardY(l,i/50-1,actualScale);
-    assert.ok(Math.abs(y)+half<=l.radiusY+l.halfHeight+1e-6);
+  const top = 42, bottom = 988, mid = 500;
+  for (const zoom of [.65, 1, 1.35]) {
+    const layout = fitCardSphere({ width: 1480, height: mid * 2, cardWidth: 194, cardHeight: 233, top, bottom, zoom });
+    for (const cardScale of [.36, .67, .98, 1.078]) for (const yaw of [0, 8, 16]) {
+      const ratio = cardScale / 1.1;
+      const halfHeight = layout.halfHeight * ratio;
+      const perspective = 1200 / (1200 - layout.halfWidth * ratio * Math.sin(yaw * Math.PI / 180));
+      for (let i = 0; i <= 100; i++) {
+        const center = layout.centerY + projectCardY(layout, i / 50 - 1, cardScale * layout.scale, yaw);
+        assert.ok(mid + (center - halfHeight - mid) * perspective >= top - 1e-6);
+        assert.ok(mid + (center + halfHeight - mid) * perspective <= bottom + 1e-6);
+      }
+    }
   }
-  const scale=.67*l.scale;
-  assert.ok(projectCardY(l,.98,scale)>.99*(l.radiusY+l.halfHeight-l.halfHeight*.67/1.1));
+  const layout = fitCardSphere({ width: 1480, height: mid * 2, cardWidth: 194, cardHeight: 233, top, bottom });
+  const flatPoleCenter = layout.centerY + projectCardY(layout, -1, .67 * layout.scale, 0);
+  assert.ok(Math.abs(flatPoleCenter - layout.halfHeight * .67 / 1.1 - top) < 1e-6);
 });

@@ -32,6 +32,19 @@ test('non-China update order keeps GitHub first', () => {
   assert.equal(result.urls.length, 5);
 });
 
+test('download addresses preserve the installer name from the release manifest', () => {
+  const fileName = 'ORBIT-Music-Setup-1.2.3-x64.exe';
+  const update = parseUpdateManifest(`version: 1.2.3
+files:
+  - url: ${fileName}
+    sha512: ${Buffer.alloc(64).toString('base64')}
+    size: 123456
+`);
+  const candidates = buildUpdateCandidates(update);
+  assert.equal(candidates.fileName, fileName);
+  for (const url of candidates.urls) assert.ok(url.endsWith(`/v1.2.3/${fileName}`));
+});
+
 test('China update checks use mirrors before GitHub', () => {
   const urls = buildManifestCandidates(true);
   assert.match(urls[0], /^https:\/\/ghfast\.top\/https:\/\/github\.com\//);

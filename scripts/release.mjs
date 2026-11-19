@@ -19,7 +19,7 @@ import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { build, Platform } = require('electron-builder');
+const { Arch, build, Platform } = require('electron-builder');
 
 const outputDir = process.env.ORBIT_BUILD_OUTPUT || path.join(os.tmpdir(), 'orbit-build');
 
@@ -54,7 +54,9 @@ if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
 console.log(`[release] 输出目录（工作区外）：${outputDir}`);
 
 await build({
-  targets: Platform.WINDOWS.createTarget(['nsis', 'portable', 'zip']),
+  // Older updaters expect an installer filename without an architecture suffix.
+  // Publish just the x64 build so the installer name stays unambiguous.
+  targets: Platform.WINDOWS.createTarget(['nsis', 'portable', 'zip'], Arch.x64),
   config: {
     directories: { output: outputDir },
   },

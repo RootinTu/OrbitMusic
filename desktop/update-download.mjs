@@ -128,8 +128,9 @@ function installerFile(updateInfo) {
 
 function safeFileName(rawUrl, version) {
   try {
-    const name = decodeURIComponent(new URL(String(rawUrl)).pathname.split('/').pop() || '');
-    if (name && name === path.basename(name) && /\.exe$/i.test(name)) return name;
+    const url = new URL(String(rawUrl), LATEST_MANIFEST_URL);
+    const name = decodeURIComponent(url.pathname.split('/').pop() || '');
+    if (/^[^/\\]+\.exe$/i.test(name)) return name;
   } catch { /* use the stable release filename below */ }
   return `ORBIT-Music-Setup-${version}.exe`;
 }

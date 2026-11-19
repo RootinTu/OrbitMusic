@@ -1462,7 +1462,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         sphereLayout = fitCardSphere({ width, height,
           cardWidth: firstCard?.offsetWidth || 194, cardHeight: firstCard?.offsetHeight || 233,
           top: mobile ? Math.max(0, (header?.bottom || rect.top) - rect.top) + 12
-            : Math.max(12, (titlebar?.bottom ?? rect.top) - rect.top + 8),
+            : Math.max(12, (titlebar?.bottom ?? rect.top) - rect.top + 4),
           bottom: mobile ? Math.min(height, (player?.top ?? rect.bottom) - rect.top) - 12 : height - 12,
           zoom: propsRef.current.zoom, mobile,
         });
@@ -1490,7 +1490,9 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         const active = card.track.id === currentTrack && isPlaying;
         // 正在播的那张卡片跟着节拍一起呼吸
         const scale = (0.36 + (depth + 1) * 0.31) * (active ? 1.05 + beatPulse * 0.045 : 1) * sphereLayout.scale;
-        setStyle('transform', `translate3d(-50%,-50%,0) translate3d(${(x * radiusX + sphereLayout.centerX - sphereAnchorX).toFixed(2)}px,${(projectCardY(sphereLayout, projectedY, scale) + sphereLayout.centerY - sphereAnchorY).toFixed(2)}px,0) scale(${scale.toFixed(4)}) rotateY(${(x * -16).toFixed(2)}deg) rotateZ(${(x * projectedY * 5).toFixed(2)}deg)`);
+        const yaw = x * -16;
+        const cardY = projectCardY(sphereLayout, projectedY, scale, yaw);
+        setStyle('transform', `translate3d(-50%,-50%,0) translate3d(${(x * radiusX + sphereLayout.centerX - sphereAnchorX).toFixed(2)}px,${(cardY + sphereLayout.centerY - sphereAnchorY).toFixed(2)}px,0) scale(${scale.toFixed(4)}) rotateY(${yaw.toFixed(2)}deg) rotateZ(${(x * projectedY * 5).toFixed(2)}deg)`);
         if (active && !dragging) {
           setStyle('boxShadow', `0 12px 35px #0008, 0 0 0 2px #ffffff3d, 0 0 ${(16 + beatPulse * 34).toFixed(1)}px rgba(255,255,255,${(0.06 + beatPulse * 0.2).toFixed(3)})`);
           element.dataset.glow = '1';
