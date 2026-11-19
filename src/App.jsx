@@ -584,10 +584,9 @@ function makeCardCoordinates() {
   return result;
 }
 
-function Universe({ current, playing, currentTime, duration, onSelect, zoom, backdropMode, onRotateToast, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge }) {
+function Universe({ current, playing, currentTime, duration, onSelect, zoom, backdropMode, onRotateToast, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge, soundfield }) {
   const universeRef = useRef(null);
-  const canvasRef = useRef(null);
-  const glCanvasRef = useRef(null);
+  const { canvasRef, glCanvasRef } = soundfield;
   const glTerrainRef = useRef(null);
   const cardRefs = useRef([]);
   const suppressClickUntil = useRef(0);
@@ -618,7 +617,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
     }
     glCanvas.style.display = glTerrainRef.current ? 'block' : 'none';
     return undefined;
-  }, [backdropMode]);
+  }, [backdropMode, glCanvasRef]);
 
   useEffect(() => () => {
     if (glTerrainRef.current) {
@@ -1692,12 +1691,10 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       universe.removeEventListener('keydown', onKeyDown);
       document.getElementById('rotate')?.removeEventListener('click', toggleRotate);
     };
-  }, [analysisRef, coordinates, onRotateToast]);
+  }, [analysisRef, canvasRef, coordinates, onRotateToast]);
 
   return (
     <main ref={universeRef} id="universe" aria-label="拖动旋转歌单宇宙" tabIndex="0">
-      <canvas ref={glCanvasRef} id="gpufield" aria-hidden="true" />
-      <canvas ref={canvasRef} id="soundfield" aria-hidden="true" />
       <div className="ambient" /><div className="orbit-line one" /><div className="orbit-line two" />
       {tracks[current] ? (
         <LyricsPanel track={tracks[current]} trackNumber={current + 1} currentTime={currentTime} duration={duration} playing={playing} audioRef={audioRef} analysisRef={analysisRef} lyricsVersion={lyricsVersion} />
@@ -1950,6 +1947,9 @@ function DetailDialog({ track, onClose, onPlay }) {
 
 export default function App() {
   const audioRef = useRef(null);
+  const canvasRef = useRef(null);
+  const glCanvasRef = useRef(null);
+  const soundfield = useMemo(() => ({ canvasRef, glCanvasRef }), []);
   const toastTimer = useRef(null);
   const analysisRef = useRef({
     context: null, analyser: null, spectrum: null, source: null,
@@ -2596,7 +2596,13 @@ export default function App() {
         updater={updater}
       />
       <UpdateBadge updater={updater} />
-      <GlassBackdrop enabled={journal || backdropMode < 3}>{journal ? <Journal onOpen={setSelected} /> : (
+      {!journal && (
+        <div className="native-soundfield" aria-hidden="true">
+          <canvas ref={glCanvasRef} id="gpufield" />
+          <canvas ref={canvasRef} id="soundfield" />
+        </div>
+      )}
+      <GlassBackdrop soundfield={journal ? null : soundfield}>{journal ? <Journal onOpen={setSelected} /> : (
         <Universe
           current={current}
           playing={playing}
@@ -2608,6 +2614,7 @@ export default function App() {
           onRotateToast={showToast}
           analysisRef={analysisRef}
           audioRef={audioRef}
+          soundfield={soundfield}
           libraryVersion={libraryVersion}
           lyricsVersion={lyricsVersion}
           onOpenBridge={() => setQQBridgeOpen(true)}

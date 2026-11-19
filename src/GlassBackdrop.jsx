@@ -1,19 +1,14 @@
 import { useEffect, useRef } from 'react';
 import { getGlassSurfaceLayout, getGlassSurfaces, observeGlassSurfaces, setGlassSceneActive } from './glassScene.js';
+import { createGlassPresentation } from './glassPresentation.js';
 
 /** Upstream's HTML-in-Canvas path: the live scene, not a canvas-only reconstruction. */
-export default function GlassBackdrop({ children, enabled = true }) {
+export default function GlassBackdrop({ children, soundfield }) {
   const mountRef = useRef(null);
   const contentRef = useRef(null);
   useEffect(() => {
     const mount = mountRef.current, content = contentRef.current;
     const root = document.documentElement;
-    // The terrain animates directly in the browser compositor. Snapshotting it
-    // in the full-screen glass canvas can skip the short frames at drum hits.
-    if (!enabled) {
-      root.dataset.glassRenderer = 'css-fallback';
-      return () => { delete root.dataset.glassRenderer; };
-    }
     const media = matchMedia('(min-width: 901px)');
     const transparency = matchMedia('(prefers-reduced-transparency: reduce)');
     let disposed = false, generation = 0, release = () => {};
@@ -28,7 +23,9 @@ export default function GlassBackdrop({ children, enabled = true }) {
         root.dataset.glassRenderer = 'css-fallback';
         return;
       }
-      let device, core, source, canvas, frame, unsubscribe;
+      let device, core, source, canvas, frame, unsubscribe, presentation;
+      let lastBackdropCanvas, backdropOpacity = 0;
+      const layouts = [];
       let failed = false, active = false, inFlight = false;
       const nodes = new Map();
       const cleanup = () => {
@@ -39,7 +36,7 @@ export default function GlassBackdrop({ children, enabled = true }) {
         content.classList.remove('is-canvas-content');
         mount.classList.remove('is-full-dom');
         setGlassSceneActive(false);
-        source?.destroy(); core?.destroy(); canvas?.remove(); device?.destroy();
+        presentation?.destroy(); source?.destroy(); core?.destroy(); canvas?.remove(); device?.destroy();
       };
       const fail = error => {
         if (failed || disposed || token !== generation) return;
@@ -65,6 +62,7 @@ export default function GlassBackdrop({ children, enabled = true }) {
         const context = canvas.getContext('webgpu');
         if (!context) throw new Error('WebGPU context unavailable');
         const format = navigator.gpu.getPreferredCanvasFormat();
+        if (soundfield) presentation = createGlassPresentation(device, format);
         const scene = new Scene();
         const background = new Html({ element: content, width: innerWidth, height: innerHeight, zIndex: -100 });
         scene.add(background);
@@ -169,9 +167,11 @@ export default function GlassBackdrop({ children, enabled = true }) {
             const h = Math.max(1, Math.round(innerHeight * nextDpr));
             if (width !== w || height !== h || dpr !== nextDpr) {
               dpr = nextDpr; width = canvas.width = w; height = canvas.height = h;
-              context.configure({ device, format, alphaMode: 'opaque' });
+              context.configure({ device, format, alphaMode: presentation ? 'premultiplied' : 'opaque' });
+              presentation?.resize(w, h);
               background.width = innerWidth; background.height = innerHeight;
             }
+            layouts.length = 0;
             for (const entry of getGlassSurfaces()) {
               const layout = getGlassSurfaceLayout(entry);
               let glass = nodes.get(entry);
@@ -181,6 +181,7 @@ export default function GlassBackdrop({ children, enabled = true }) {
                 if (glass) { glass.remove(); nodes.delete(entry); }
                 continue;
               }
+              layouts.push(layout);
               if (!glass) {
                 glass = new Glass({ ...layout, pointerEvents: false });
                 containers[entry.options.variant].add(glass);
@@ -191,13 +192,26 @@ export default function GlassBackdrop({ children, enabled = true }) {
                 }
               }
             }
-            // Chromium's HTML-in-Canvas API needs an explicit paint request for
-            // a fresh descendant snapshot (including removals and canvas frames).
+            // Request a fresh snapshot of the cards and lyrics. The independent
+            // soundfield is sampled separately for the glass panes.
             canvas.requestPaint();
             const layers = source.sync();
-            core.render({ layers, width, height, dpr, outputTexture: context.getCurrentTexture(), contentSource: source });
+            const snapshot = source.getSceneHtmlEntry(background);
+            const frameOptions = { layers, width, height, dpr, contentSource: source };
+            if (presentation && snapshot?.copiedDeviceWidth > 0) {
+              const terrain = soundfield.glCanvasRef.current;
+              const backdrop = terrain?.style.display === 'block' ? terrain : soundfield.canvasRef.current;
+              if (backdrop !== lastBackdropCanvas) {
+                backdropOpacity = backdrop ? Number(getComputedStyle(backdrop).opacity) : 0;
+                lastBackdropCanvas = backdrop;
+              }
+              core.render({ ...frameOptions, ...presentation.prepare(backdrop, backdropOpacity) });
+              presentation.present(snapshot, context.getCurrentTexture(), layouts, dpr);
+            } else if (!presentation) {
+              core.render({ ...frameOptions, outputTexture: context.getCurrentTexture() });
+            }
             device.queue.onSubmittedWorkDone().then(() => { inFlight = false; }, fail);
-            if (!active && source.getSceneHtmlEntry(background)?.copiedDeviceWidth > 0) {
+            if (!active && snapshot?.copiedDeviceWidth > 0) {
               active = true; root.dataset.glassRenderer = 'full-dom';
               setGlassSceneActive(true);
             }
@@ -219,8 +233,8 @@ export default function GlassBackdrop({ children, enabled = true }) {
       release();
       delete document.documentElement.dataset.glassRenderer;
     };
-  }, [enabled]);
+  }, [soundfield]);
   return <div className="glass-backdrop-mount" ref={mountRef}>
-    <div className="glass-scene-content" ref={contentRef}>{children}</div>
+    <div className={`glass-scene-content${soundfield ? ' has-native-backdrop' : ''}`} ref={contentRef}>{children}</div>
   </div>;
 }

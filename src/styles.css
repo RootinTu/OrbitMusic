@@ -211,6 +211,10 @@ dialog{width:min(760px,90vw);padding:0;border:1px solid #ffffff30;border-radius:
 .glass-backdrop-mount.is-full-dom{display:block;position:fixed;inset:0;z-index:0}
 .full-dom-glass-canvas{display:block;width:100%;height:100%}
 .glass-scene-content.is-canvas-content{display:block;width:100vw;height:var(--app-vh,100dvh);background:#101113;overflow:hidden}
+.glass-scene-content.has-native-backdrop{background:transparent}
+.native-soundfield{position:absolute;left:0;right:0;height:calc(var(--app-vh,100dvh) - 100px - var(--safe-top));pointer-events:none}
+@media(max-width:1000px){.native-soundfield{height:calc(var(--app-vh,100dvh) - 85px - var(--safe-top))}}
+@media(max-width:600px){.native-soundfield{height:calc(var(--app-vh,100dvh) - 78px - var(--safe-top))}}
 /* Ambient sky glow extends behind the top capsules so liquid-dom always has soft tonal gradients to refract. */
 .ambient{background:radial-gradient(ellipse 68% 42% at 50% 6%,#9aa6be16,transparent 68%),radial-gradient(ellipse 76% 32% at 50% 98%,#8ea0be18,transparent 70%),radial-gradient(ellipse at 55% 45%,#6e70721a,transparent 60%)}
 /* Browser fallback approximates liquid-dom optics (bezel speculars + inner refraction) without hard CSS borders. */
@@ -281,6 +285,7 @@ nav.liquid-control span,.liquid-control .playlist-toggle-count{color:#b4b8c1}
 @media(min-width:901px){
   :root{--desktop-header-height:100px}
   header{position:fixed;inset:0 0 auto;background:linear-gradient(#1011130d,transparent)}
+  .native-soundfield{position:fixed;inset:0;height:auto}
   #universe{height:var(--app-vh,100dvh)}
   .intro{top:calc(var(--safe-top) + var(--desktop-header-height) + 3.5dvh)}
   #journal-view{height:var(--app-vh,100dvh);padding-top:calc(var(--safe-top) + var(--desktop-header-height) + 25px)}
