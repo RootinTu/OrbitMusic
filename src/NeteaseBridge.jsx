@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import GlassSurface from './GlassSurface.jsx';
 import { MAX_NETEASE_IMPORTS } from './neteaseLibrary.js';
 
 async function requestJson(url, options) {
@@ -113,7 +114,8 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
   if (!open) return null;
   return (
     <div className="bridge-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="qq-bridge netease-bridge glass" ref={panelRef} tabIndex="-1" aria-label="网易云音乐桥">
+      <section className="qq-bridge netease-bridge liquid-panel" ref={panelRef} tabIndex="-1" role="dialog" aria-modal="true" aria-label="网易云音乐桥">
+        <GlassSurface variant="player" />
         <div className="bridge-head">
           <div><span className="eyebrow">NETEASE CLOUD MUSIC</span><h2>网易云音乐桥</h2></div>
           <button className="bridge-close" onClick={onClose} aria-label="关闭">×</button>

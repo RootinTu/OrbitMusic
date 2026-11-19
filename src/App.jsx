@@ -149,7 +149,6 @@ function SvgDefs() {
         <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9h4l4-3v12l-4-3H4Z" fill="currentColor" stroke="none" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 6a9 9 0 0 1 0 12" /></symbol>
         <symbol id="i-orbit" viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="18" ry="8" transform="rotate(-35 20 20)" /><circle cx="20" cy="20" r="5" fill="currentColor" stroke="none" /></symbol>
         <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 6h3c5 0 7 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 4-3 5-5m3-4c1-2 2-3 4-3h3m-4-4 4 4-4 4" /></symbol>
-        <symbol id="i-wait" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9" /></symbol>
         <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" strokeWidth="2" /></symbol>
         <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M4 10v4M8 6.5v11M12 3.5v17M16 8v8M20 11v2" strokeWidth="2" strokeLinecap="round" /></symbol>
       </defs>
@@ -687,7 +686,6 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
     };
 
     let beatPulse = 0;
-    let playerElement = null;
     let lyricsPanel = null;
     let lastBeatValue = -1;
 
@@ -1355,9 +1353,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         lastBeatValue = quantized;
         const beatText = quantized.toFixed(2);
         if (!lyricsPanel) lyricsPanel = document.getElementById('lyrics-panel');
-        if (!playerElement) playerElement = document.querySelector('.player');
         lyricsPanel?.style.setProperty('--beat', beatText);
-        playerElement?.style.setProperty('--beat', beatText);
       }
 
       // GPU 地形模式：24k 个实例化立方体交给 WebGL，2D 画布只保留上面的 UI 层。
@@ -1685,7 +1681,6 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
       layoutObserver.disconnect();
       // 离开宇宙视图时把节拍值归零，免得停在某一帧的亮度上
       document.getElementById('lyrics-panel')?.style.setProperty('--beat', '0');
-      playerElement?.style.setProperty('--beat', '0');
       universe.removeEventListener('pointerdown', startDrag);
       universe.removeEventListener('pointermove', moveDrag);
       universe.removeEventListener('pointerup', endDrag);
@@ -1801,18 +1796,13 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
           <button className="icon secondary" onClick={onShuffle} aria-label="随机播放" aria-pressed={random}><Icon name="shuffle" /></button>
           <button className="icon" onClick={() => onStep(-1)} aria-label="上一首"><Icon name="next" className="flip" /></button>
           <button
-            className={`play ${preparing ? 'preparing' : ''}`}
+            className="icon"
             onClick={onPlay}
             disabled={preparing}
             aria-busy={preparing}
             aria-label={preparing ? '正在准备歌词与音源' : playing ? '暂停' : '播放'}
           >
-            {preparing ? (
-              <span className="play-loader" aria-hidden="true">
-                <span className="play-loader-orbit" />
-                <Icon name="wait" className="play-loader-icon" />
-              </span>
-            ) : <Icon name={playing ? 'pause' : 'play'} />}
+            <Icon name={playing ? 'pause' : 'play'} />
           </button>
           <button className="icon" onClick={() => onStep(1)} aria-label="下一首"><Icon name="next" /></button>
           <button className="icon secondary" onClick={onRepeat} aria-label="循环播放" aria-pressed={repeat}>↻</button>
@@ -2604,7 +2594,7 @@ export default function App() {
         updater={updater}
       />
       <UpdateBadge updater={updater} />
-      <GlassBackdrop>{journal ? <Journal onOpen={setSelected} /> : (
+      <GlassBackdrop enabled={journal || backdropMode < 3}>{journal ? <Journal onOpen={setSelected} /> : (
         <Universe
           current={current}
           playing={playing}

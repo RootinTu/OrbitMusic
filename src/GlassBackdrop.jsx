@@ -2,11 +2,18 @@ import { useEffect, useRef } from 'react';
 import { getGlassSurfaceLayout, getGlassSurfaces, observeGlassSurfaces, setGlassSceneActive } from './glassScene.js';
 
 /** Upstream's HTML-in-Canvas path: the live scene, not a canvas-only reconstruction. */
-export default function GlassBackdrop({ children }) {
+export default function GlassBackdrop({ children, enabled = true }) {
   const mountRef = useRef(null);
   const contentRef = useRef(null);
   useEffect(() => {
     const mount = mountRef.current, content = contentRef.current;
+    const root = document.documentElement;
+    // The terrain animates directly in the browser compositor. Snapshotting it
+    // in the full-screen glass canvas can skip the short frames at drum hits.
+    if (!enabled) {
+      root.dataset.glassRenderer = 'css-fallback';
+      return () => { delete root.dataset.glassRenderer; };
+    }
     const media = matchMedia('(min-width: 901px)');
     const transparency = matchMedia('(prefers-reduced-transparency: reduce)');
     let disposed = false, generation = 0, release = () => {};
@@ -14,7 +21,6 @@ export default function GlassBackdrop({ children }) {
       const token = ++generation;
       release(); release = () => {};
       setGlassSceneActive(false);
-      const root = document.documentElement;
       const supported = navigator.gpu && globalThis.GPUQueue?.prototype?.copyElementImageToTexture
         && HTMLCanvasElement.prototype.requestPaint;
       root.dataset.glassRenderer = supported ? 'initializing' : 'css-fallback';
@@ -213,7 +219,7 @@ export default function GlassBackdrop({ children }) {
       release();
       delete document.documentElement.dataset.glassRenderer;
     };
-  }, []);
+  }, [enabled]);
   return <div className="glass-backdrop-mount" ref={mountRef}>
     <div className="glass-scene-content" ref={contentRef}>{children}</div>
   </div>;

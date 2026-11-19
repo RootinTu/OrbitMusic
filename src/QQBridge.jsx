@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import GlassSurface from './GlassSurface.jsx';
 import { LOOSE_PLAYLIST_ID, MAX_QQ_IMPORTS, MAX_QQ_PLAYLISTS } from './qqLibrary.js';
 
 async function requestJson(url, options) {
@@ -331,7 +332,8 @@ export default function QQBridge({
   if (!open) return null;
   return (
     <div className="bridge-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="qq-bridge glass" ref={panelRef} tabIndex="-1" role="dialog" aria-modal="true" aria-label="QQ 音乐桥">
+      <section className="qq-bridge liquid-panel" ref={panelRef} tabIndex="-1" role="dialog" aria-modal="true" aria-label="QQ 音乐桥">
+        <GlassSurface variant="player" />
         <header className="bridge-head">
           <div>
             <span className="eyebrow">ORBIT BRIDGE / QQ MUSIC</span>
