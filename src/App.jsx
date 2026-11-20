@@ -4,8 +4,9 @@ import { ensureLrc, findLrcIndex, invalidateLrc, prefetchLrc, waitForLrc } from 
 import LrcLine from './LrcLine.jsx';
 import GlassSurface from './GlassSurface.jsx';
 import GlassBackdrop from './GlassBackdrop.jsx';
-import QQBridge from './QQBridge.jsx';
-import NeteaseBridge from './NeteaseBridge.jsx';
+import MusicBridge from './MusicBridge.jsx';
+import MusicAccountAvatar from './MusicAccountAvatar.jsx';
+import { musicAccountName, readDisplayMusicAccount, saveDisplayMusicAccount, useLocalQQAvatar, useMusicAccount } from './musicAccounts.js';
 import {
   clearQQTracks, importQQPlaylist, listQQPlaylists,
   getActivePlaylistId, removeQQPlaylist, switchQQPlaylist,
@@ -16,7 +17,8 @@ import {
   listNeteasePlaylists, switchNeteasePlaylist,
 } from './neteaseLibrary.js';
 import { BeatEngine } from './beatEngine.js';
-import { OUTPUT_MODES, applySink, clearPlaybackMemory, listOutputs, readBeatOffset, readLastTrack, readOutputPref, requestDeviceLabels, resumeAt, saveBeatOffset, saveLastTrack, saveOutputPref, saveProgress } from './audioOut.js';
+import { OUTPUT_MODES, applySink, listOutputs, readBeatOffset, readOutputPref, requestDeviceLabels, saveBeatOffset, saveOutputPref } from './audioOut.js';
+import { clearProviderPlayback, forgetPlaylistPlayback, playbackTrackKey, readLastTrack, resumeAt, saveLastTrack, saveProgress } from './playbackMemory.js';
 import { createTerrainGL } from './terrainGL.js';
 import { fitCardSphere, projectCardY } from './sphereLayout.js';
 
@@ -38,7 +40,8 @@ const initialQQPlaylists = listQQPlaylists();
 const initialNeteasePlaylists = listNeteasePlaylists();
 let initialActiveLibrary = null;
 try { initialActiveLibrary = localStorage.getItem(ACTIVE_LIBRARY_KEY); } catch { /* ignore */ }
-const [initialProvider, initialRawId] = String(initialActiveLibrary || '').split(':');
+const [initialProvider, ...initialIdParts] = String(initialActiveLibrary || '').split(':');
+const initialRawId = initialIdParts.join(':');
 const validInitial = initialProvider === 'qq'
   ? initialQQPlaylists.some(item => item.id === initialRawId)
   : initialProvider === 'netease' && initialNeteasePlaylists.some(item => item.id === initialRawId);
@@ -392,7 +395,8 @@ function useUpdater() {
   return { supported, state, version, check, download, install, dismiss };
 }
 
-function Header({ journal, onChangeView, onOpenBridge, onOpenNetease, qqCount, neteaseCount, playlists, activePlaylist, onSwitchPlaylist, updater }) {
+function Header({ journal, onChangeView, onOpenBridge, bridgeOpen, profile, accountProvider, playlists, activePlaylist, onSwitchPlaylist, updater }) {
+  const accountName = profile ? musicAccountName(profile, accountProvider) : '';
   return (
     <header>
       {window.orbitDesktop?.platform !== 'win32' ? (
@@ -408,12 +412,14 @@ function Header({ journal, onChangeView, onOpenBridge, onOpenNetease, qqCount, n
       <div className="header-right">
         <PlaylistSwitch playlists={playlists} activePlaylist={activePlaylist} onSwitchPlaylist={onSwitchPlaylist} />
         <div className="edition">
-          <button className="bridge-launch liquid-control" onClick={onOpenBridge}><GlassSurface control /><span className="live-dot" /> QQ 音乐桥{qqCount ? ` · ${qqCount}` : ''}</button>
-          <button className="bridge-launch netease-launch liquid-control" onClick={onOpenNetease}><GlassSurface control /><span className="live-dot" /> 网易云{neteaseCount ? ` · ${neteaseCount}` : ''}</button>
-          <span>/</span>
-          {updater.supported
-            ? <button className="version-chip liquid-control" onClick={updater.check} title="检查更新"><GlassSurface control />{updater.version ? `v${updater.version}` : '更新'}</button>
-            : 'SEP 2026'}
+          <button className="bridge-launch liquid-control" onClick={onOpenBridge} aria-haspopup="dialog"
+            aria-expanded={bridgeOpen} aria-controls="music-bridge" title={accountName || '登录'}
+            aria-label={accountName ? `管理音乐账号 ${accountName}` : '登录'}>
+            <GlassSurface control />
+            {profile && <MusicAccountAvatar profile={profile} />}
+            <span className="bridge-launch-label">{accountName || '登录'}</span>
+          </button>
+          {updater.supported && <button className="version-chip liquid-control" onClick={updater.check} title="检查更新"><GlassSurface control />{updater.version ? `v${updater.version}` : '更新'}</button>}
         </div>
       </div>
     </header>
@@ -1702,8 +1708,8 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         <div className="empty-universe">
           <span className="eyebrow">ORBIT DESKTOP / EMPTY LIBRARY</span>
           <h1>你的音乐宇宙，<br />从第一首导入开始。</h1>
-          <p>搜索 QQ 音乐，或连接账号导入自己创建与收藏的歌单。</p>
-          <button className="empty-import" onClick={onOpenBridge}>打开 QQ 音乐桥 <span>↗</span></button>
+          <p>从 QQ 音乐或网易云音乐搜索歌曲、导入歌单。</p>
+          <button className="empty-import" onClick={onOpenBridge}>登录或导入歌曲 <span>↗</span></button>
         </div>
       )}
       <div id="sphere">
@@ -1957,8 +1963,23 @@ export default function App() {
     energy: 0, beat: 0, bass: 0, treble: 0, beatHigh: 0, lowLatency: false,
   });
   const [journal, setJournal] = useState(false);
-  const [qqBridgeOpen, setQQBridgeOpen] = useState(false);
-  const [neteaseBridgeOpen, setNeteaseBridgeOpen] = useState(false);
+  const [bridgeOpen, setBridgeOpen] = useState(false);
+  const [bridgeProvider, setBridgeProvider] = useState(() => initialActiveLibrary?.startsWith('netease:') ? 'netease' : 'qq');
+  const [displayAccount, setDisplayAccount] = useState(readDisplayMusicAccount);
+  const chooseDisplayAccount = provider => {
+    setDisplayAccount(provider);
+    saveDisplayMusicAccount(provider);
+  };
+  const openBridge = useCallback(provider => {
+    if (provider) setBridgeProvider(provider);
+    setBridgeOpen(true);
+  }, []);
+  const closeBridge = useCallback(() => setBridgeOpen(false), []);
+  const qqProfileAccount = useMusicAccount('qq');
+  const qqAccount = useLocalQQAvatar(qqProfileAccount);
+  const neteaseAccount = useMusicAccount('netease');
+  const updateQQAccount = qqAccount.update;
+  const updateNeteaseAccount = neteaseAccount.update;
   const updater = useUpdater();
   // 导入的歌单列表 + 当前生效的那个（null 表示「全部」）
   const [qqPlaylists, setQQPlaylists] = useState(listQQPlaylists);
@@ -1972,11 +1993,7 @@ export default function App() {
   // 曲库版本号：只要重建过 tracks 就自增。不能用 tracks.length——
   // 两个歌单都是 30 首时长度不变，依赖它的 useMemo 不会重算，卡片就不跟着切。
   const [libraryVersion, setLibraryVersion] = useState(0);
-  // 上次听到哪一首就接着哪一首，别每次都从头回到 01
-  const [current, setCurrent] = useState(() => {
-    const saved = readLastTrack();
-    return saved >= 0 && saved < tracks.length ? saved : 0;
-  });
+  const [current, setCurrent] = useState(() => readLastTrack(initialActiveLibrary, tracks));
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   // 首屏先用文件元数据中的真实时长，避免移动端要等整个 MP3 元数据稳定后才出现进度条。
@@ -2000,23 +2017,20 @@ export default function App() {
   const [qqQuality, setQQQuality] = useState(readQQQuality);
   const [qualityBusy, setQualityBusy] = useState(false);
   const [playerHidden, setPlayerHidden] = useState(false);
-  // ref 必须从恢复出来的歌曲开始；先写 0 会让首屏初始化把续播位置套到第一首歌。
   const currentRef = useRef(current);
-  const preparingRef = useRef(false);
+  const mediaRef = useRef(null);
+  const preparingRef = useRef(null);
   // QQ 音源报错只提示一次（同一首歌反复点播放不重复弹）
   const qqErrorShownRef = useRef(null);
-  const cancelPlayRef = useRef(false);
   const slowHintTimer = useRef(null);
   const outputPrefRef = useRef(outputPref);
   outputPrefRef.current = outputPref;
   const playingRef = useRef(false);
   playingRef.current = playing;
-  const resumeWantedRef = useRef(0);
-
   const syncDuration = useCallback(audio => {
-    const activeTrack = tracks[currentRef.current];
-    if (!activeTrack) return 0;
-    const next = resolveMediaDuration(audio, activeTrack.duration);
+    const media = mediaRef.current;
+    if (!media || audio.currentSrc !== media.src) return 0;
+    const next = resolveMediaDuration(audio, media.duration);
     if (next > 0) setDuration(next);
     return next;
   }, []);
@@ -2028,16 +2042,72 @@ export default function App() {
   }, []);
 
   useEffect(() => () => { clearTimeout(toastTimer.current); clearTimeout(slowHintTimer.current); }, []);
-  useEffect(() => { currentRef.current = current; }, [current]);
+
+  const persistPlayback = useCallback((audio, force = false) => {
+    const media = mediaRef.current;
+    if (!media || media.pendingPosition !== undefined || audio.readyState < 1 || audio.currentSrc !== media.src) return;
+    const now = performance.now();
+    if (!force && now - media.savedAt < 2000) return;
+    saveProgress(media.key, audio.ended ? 0 : audio.currentTime);
+    media.savedAt = now;
+  }, []);
+
+  const loadTrackAudio = useCallback((track, playlist) => {
+    const audio = audioRef.current;
+    // The track list may already have been rebuilt. Save against the audio's
+    // own identity, which still belongs to the outgoing song.
+    persistPlayback(audio, true);
+    setCurrentTime(0);
+    setDuration(track?.duration || 0);
+    if (!track) {
+      mediaRef.current = null;
+      audio.removeAttribute('src');
+    } else {
+      audio.src = track.src;
+      mediaRef.current = {
+        key: playbackTrackKey(track),
+        playlist,
+        src: audio.src,
+        duration: track.duration,
+        pendingPosition: null,
+        savedAt: 0,
+      };
+    }
+    audio.load();
+    prefetchLrc(track?.lyrics);
+  }, [persistPlayback]);
+
+  const restorePosition = useCallback(audio => {
+    const duration = syncDuration(audio);
+    const media = mediaRef.current;
+    if (!media || media.pendingPosition === undefined || audio.readyState < 1 || audio.currentSrc !== media.src) return;
+    const position = media.pendingPosition ?? resumeAt(media.key, duration);
+    if (position > 0) audio.currentTime = duration > 0 ? Math.min(position, duration) : position;
+    media.pendingPosition = undefined;
+    setCurrentTime(audio.currentTime);
+  }, [syncDuration]);
+
+  const reloadTrackAudio = useCallback((audio, media, src = media.src) => {
+    persistPlayback(audio, true);
+    if (media.pendingPosition === undefined) media.pendingPosition = audio.ended ? 0 : audio.currentTime;
+    if (src !== audio.src) audio.src = src;
+    media.src = audio.src;
+    audio.load();
+  }, [persistPlayback]);
+
+  const cancelPlaybackPreparation = useCallback(() => {
+    preparingRef.current = null;
+    clearTimeout(slowHintTimer.current);
+    setPreparing(false);
+  }, []);
+
   useEffect(() => {
     const audio = audioRef.current;
     const initial = currentRef.current;
     if (!tracks[initial]) return;
-    audio.src = tracks[initial].src;
+    loadTrackAudio(tracks[initial], initialActiveLibrary);
     audio.volume = 0.65;
-    audio.load();
     // 首屏就把当前歌词和下一首准备好，点播放时基本不用再等
-    prefetchLrc(tracks[initial].lyrics);
     prefetchLrc(tracks[(initial + 1) % tracks.length].lyrics);
     // 上次选了具体输出设备的话，启动时就把它接回去（此时还没被 Web Audio 接管，元素级即可）
     if (outputPrefRef.current.deviceId) {
@@ -2045,41 +2115,32 @@ export default function App() {
         if (!ok) showToast('上次的输出设备不可用，已回到系统默认');
       });
     }
-  }, [showToast]);
+  }, [loadTrackAudio, showToast]);
 
-  // 断点续播：切歌（含首屏）时把上次听到的位置接回去，但不自动播放
   useEffect(() => {
     const audio = audioRef.current;
-    const id = currentRef.current;
-    if (!tracks[id]) return undefined;
-    let cancelled = false;
-    const apply = () => {
-      if (cancelled) return;
-      const at = resumeAt(id, resolveMediaDuration(audio, tracks[id]?.duration));
-      if (!at) return;
-      audio.currentTime = at;
-      setCurrentTime(at);
-      resumeWantedRef.current = at;
-      showToast(`已回到上次听到 ${formatTime(at)}`);
+    const save = () => persistPlayback(audio, true);
+    const onVisibilityChange = () => { if (document.hidden) save(); };
+    window.addEventListener('pagehide', save);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', save);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-    if (audio.readyState >= 1) apply();
-    else audio.addEventListener('loadedmetadata', apply, { once: true });
-    return () => { cancelled = true; audio.removeEventListener('loadedmetadata', apply); };
-  }, [current, showToast]);
+  }, [persistPlayback]);
 
   // 音源中断后自动重连：蓝牙/外接设备回来、文件未就绪时兜底重新拉取
   const reconnect = useCallback(() => {
     const audio = audioRef.current;
-    if (!playingRef.current || !tracks[currentRef.current]) return;
-    const at = audio.currentTime || resumeWantedRef.current;
-    audio.src = tracks[currentRef.current].src;
-    audio.load();
-    const resume = () => {
-      audio.currentTime = at || 0;
+    const media = mediaRef.current;
+    if (!playingRef.current || !media || media.pendingPosition !== undefined) return;
+    reloadTrackAudio(audio, media);
+    waitUntilPlayable(audio).then(() => {
+      if (mediaRef.current !== media || audio.readyState < 3) return;
+      restorePosition(audio);
       audio.play().then(() => showToast(`已从 ${formatTime(audio.currentTime)} 继续播放`)).catch(() => {});
-    };
-    audio.addEventListener('canplay', resume, { once: true });
-  }, [showToast]);
+    });
+  }, [reloadTrackAudio, restorePosition, showToast]);
 
   // 外接设备插拔变化时：如果之前选中的设备没了（蓝牙断开），自动退回系统默认，
   // 否则会卡在一个已经不存在的输出口上，整页都没声音。
@@ -2285,38 +2346,46 @@ export default function App() {
   // 播放前先把歌词和音源都等齐：歌词最慢等 2.6s，音源最慢等 8s，
   // 超时就直接开播，宁可歌词晚一点到，也不能卡住不出声。
   const startPlayback = useCallback(async () => {
-    if (preparingRef.current || !tracks[currentRef.current]) {
-      if (!tracks[currentRef.current]) setQQBridgeOpen(true);
+    const currentTrack = tracks[currentRef.current];
+    const media = mediaRef.current;
+    if (preparingRef.current || !currentTrack || !media) {
+      if (!currentTrack) openBridge();
       return;
     }
-    preparingRef.current = true;
-    cancelPlayRef.current = false;
+    const request = {};
+    const isCurrent = () => preparingRef.current === request && mediaRef.current === media;
+    preparingRef.current = request;
     setPreparing(true);
     clearTimeout(slowHintTimer.current);
     slowHintTimer.current = setTimeout(() => showToast('正在准备歌词与音源…'), 700);
     try {
-      const currentTrack = tracks[currentRef.current];
       if (currentTrack.provider === 'qq' && window.orbitDesktop?.refreshQQLogin) {
         // 每次播放前从 Electron 的持久会话同步最新 qm_keyst/qqmusic_key。
         // QQ 可能在网页会话里刷新播放凭据，只在扫码完成时同步一次会让 VIP
         // 账号过一段时间后退化成试听或无地址。
         const auth = await window.orbitDesktop.refreshQQLogin();
+        if (!isCurrent()) return;
         if (!auth?.ok || !auth?.playbackKeyReady) {
+          updateQQAccount(null);
           showToast('QQ 播放授权未完成，请重新连接 QQ 音乐');
-          setQQBridgeOpen(true);
+          openBridge('qq');
           return;
         }
+        if (auth.profile) updateQQAccount(auth.profile);
         // 选歌时 audio 可能已经用旧凭据请求失败；同步后强制重新加载。
-        audioRef.current.load();
+        reloadTrackAudio(audioRef.current, media);
       }
       if (currentTrack.provider === 'netease' && window.orbitDesktop?.refreshNeteaseLogin) {
         const auth = await window.orbitDesktop.refreshNeteaseLogin();
+        if (!isCurrent()) return;
         if (!auth?.ok) {
+          updateNeteaseAccount(null);
           showToast('网易云登录已失效，请重新扫码登录');
-          setNeteaseBridgeOpen(true);
+          openBridge('netease');
           return;
         }
-        audioRef.current.load();
+        if (auth.profile) updateNeteaseAccount(auth.profile);
+        reloadTrackAudio(audioRef.current, media);
       }
       if (currentTrack.provider === 'qq' || currentTrack.provider === 'netease') {
         // Login/permission refresh can expose word lyrics that the pre-login
@@ -2329,47 +2398,48 @@ export default function App() {
       if (currentTrack.provider === 'qq') {
         fetch(currentTrack.src, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' })
           .then(response => {
-            if (response.headers.get('x-orbit-qq-trial')) showToast('只拿到试听片段（约 60 秒）· 完整播放需要对应会员权限');
+            if (mediaRef.current === media && response.headers.get('x-orbit-qq-trial')) showToast('只拿到试听片段（约 60 秒）· 完整播放需要对应会员权限');
           })
           .catch(() => { /* 探测失败不影响正式播放 */ });
       }
       await ensureAudioAnalysis();
-      await waitForLrc(tracks[currentRef.current].lyrics, 2600);
+      if (!isCurrent()) return;
+      await waitForLrc(currentTrack.lyrics, 2600);
+      if (!isCurrent()) return;
       await waitUntilPlayable(audioRef.current, 8000);
-      // 等待期间用户又点了暂停，就别再自作主张地播出来
-      if (!cancelPlayRef.current) await audioRef.current.play();
+      if (!isCurrent()) return;
+      restorePosition(audioRef.current);
+      await audioRef.current.play();
     } catch (error) {
+      if (!isCurrent()) return;
       // 安卓 Chrome 在等待音源期间可能丢掉用户激活态，play() 直接被拒。
       // 这时别静默失败，让用户再点一下播放键就行。
       if (error?.name === 'NotAllowedError') showToast('浏览器拦下了自动播放，请再点一次播放');
       else showToast('本地音源暂时无法播放');
     } finally {
-      clearTimeout(slowHintTimer.current);
-      preparingRef.current = false;
-      setPreparing(false);
+      if (isCurrent()) cancelPlaybackPreparation();
     }
-  }, [ensureAudioAnalysis, showToast]);
+  }, [cancelPlaybackPreparation, ensureAudioAnalysis, openBridge, reloadTrackAudio, restorePosition, showToast, updateNeteaseAccount, updateQQAccount]);
 
   const selectTrack = useCallback((id, shouldPlay = false) => {
     if (!tracks.length) {
-      setQQBridgeOpen(true);
+      openBridge();
       return;
     }
     const next = (id + tracks.length) % tracks.length;
     const audio = audioRef.current;
-    if (next !== current || audio.currentSrc !== new URL(tracks[next].src, location.href).href) {
+    const nextTrack = tracks[next];
+    if (next !== currentRef.current || audio.src !== new URL(nextTrack.src, document.baseURI).href) {
+      cancelPlaybackPreparation();
       setCurrent(next);
       currentRef.current = next;
-      saveLastTrack(next);
-      setCurrentTime(0);
-      setDuration(tracks[next]?.duration || 0);
-      audio.src = tracks[next].src;
-      audio.load();
+      loadTrackAudio(nextTrack, activeLibrary);
     }
+    saveLastTrack(activeLibrary, playbackTrackKey(nextTrack));
     // 选歌的那一刻就开始拉歌词，真正点播放时通常已经就绪
     prefetchLrc(tracks[next].lyrics);
     if (shouldPlay) startPlayback();
-  }, [current, startPlayback]);
+  }, [activeLibrary, cancelPlaybackPreparation, loadTrackAudio, openBridge, startPlayback]);
 
   // 切换 QQ 音质。自带地址是本地代理 /api/qq/audio?...&quality=xxx，音质就是 URL 上的一个参数，
   // 改掉重新加载即可。难点是换 src 会把播放位置清零，所以要把进度记下来，加载完再 seek 回去。
@@ -2379,7 +2449,8 @@ export default function App() {
     if (!track || track.provider !== 'qq' || !audio) return;
     // 已经在这一档了就别重来：换 src 会让正在播的歌断一下，重复点同一档体验很差
     if (quality === qqQuality) return;
-    const resumeAt = audio.currentTime;
+    const media = mediaRef.current;
+    if (!media) return;
     const wasPlaying = !audio.paused;
     setQualityBusy(true);
     try {
@@ -2390,18 +2461,10 @@ export default function App() {
       const nextSrc = track.src;
       setQQQuality(quality);
       try { localStorage.setItem(QQ_QUALITY_KEY, quality); } catch { /* 隐私模式下记不住，仅本次会话生效 */ }
-      audio.src = nextSrc;
-      audio.load();
-      await new Promise(resolve => {
-        const settle = () => {
-          audio.removeEventListener('loadedmetadata', settle);
-          audio.removeEventListener('error', settle);
-          resolve();
-        };
-        audio.addEventListener('loadedmetadata', settle);
-        audio.addEventListener('error', settle);
-      });
-      if (resumeAt > 0.05) { try { audio.currentTime = resumeAt; } catch { /* 元数据没到就先不 seek */ } }
+      reloadTrackAudio(audio, media, nextSrc);
+      await waitUntilPlayable(audio);
+      if (mediaRef.current !== media) return;
+      restorePosition(audio);
       if (wasPlaying) await audio.play().catch(() => showToast('浏览器拦下了自动播放，点一下播放键继续'));
       // 探一下有没有被降级成试听片段（服务端会在响应头里打标记）
       fetch(nextSrc, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' })
@@ -2414,10 +2477,10 @@ export default function App() {
     } finally {
       setQualityBusy(false);
     }
-  }, [qqQuality, showToast]);
+  }, [qqQuality, reloadTrackAudio, restorePosition, showToast]);
 
-  // 切歌单：把当前生效的曲目整体换掉，播放停在第一首等用户点——
-  // 换的是整批内容，续播到一半的位置没有意义，硬续反而会跳到一首不相干的歌。
+  // Restore this playlist's most recent song even when its list index matches
+  // the outgoing song. Source loading, rather than index changes, drives seek.
   const applyPlaylistChange = useCallback((nextActiveKey, toastText) => {
     setActiveLibrary(nextActiveKey);
     try {
@@ -2430,26 +2493,16 @@ export default function App() {
     setLibraryVersion(version => version + 1);
     setJournal(false);
     setSelected(null);
-    const audio = audioRef.current;
-    cancelPlayRef.current = true;
-    audio.pause();
+    cancelPlaybackPreparation();
+    audioRef.current.pause();
     setPlaying(false);
-    if (tracks.length) {
-      setCurrent(0);
-      currentRef.current = 0;
-      saveLastTrack(0);
-      setCurrentTime(0);
-      setDuration(tracks[0].duration || 0);
-      audio.src = tracks[0].src;
-      audio.load();
-      prefetchLrc(tracks[0].lyrics);
-      if (tracks[1]) prefetchLrc(tracks[1].lyrics);
-    } else {
-      audio.removeAttribute('src');
-      audio.load();
-    }
+    const next = readLastTrack(nextActiveKey, tracks);
+    currentRef.current = next;
+    setCurrent(next);
+    loadTrackAudio(tracks[next], nextActiveKey);
+    if (tracks.length > 1) prefetchLrc(tracks[(next + 1) % tracks.length].lyrics);
     if (toastText) showToast(toastText);
-  }, [showToast]);
+  }, [cancelPlaybackPreparation, loadTrackAudio, showToast]);
 
   const handleQQImport = useCallback((songs, meta) => {
     const result = importQQPlaylist(tracks, meta, songs);
@@ -2482,6 +2535,7 @@ export default function App() {
     const name = qqPlaylists.find(item => item.id === playlistId)?.name || '歌单';
     const result = removeQQPlaylist(tracks, playlistId);
     if (!result.removed) return;
+    forgetPlaylistPlayback(importedPlaylistKey('qq', playlistId));
     const nextName = qqPlaylists.find(item => item.id === result.activeId)?.name;
     if (activeLibrary === importedPlaylistKey('qq', playlistId)) {
       removeImportedTracks(tracks);
@@ -2498,33 +2552,11 @@ export default function App() {
   }, [activeLibrary, applyPlaylistChange, neteasePlaylists, qqPlaylists, showToast]);
 
   const handleQQClear = useCallback(() => {
-    const audio = audioRef.current;
-    const currentWasQQ = tracks[currentRef.current]?.provider === 'qq';
-    if (currentWasQQ) {
-      cancelPlayRef.current = true;
-      audio.pause();
-    }
     clearQQTracks(tracks);
-    clearPlaybackMemory();
     setQQPlaylists([]);
     setActivePlaylist(null);
-    setLibraryVersion(tracks.length);
+    setLibraryVersion(version => version + 1);
     setSelected(null);
-    if (currentWasQQ) {
-      setCurrent(0);
-      currentRef.current = 0;
-      saveLastTrack(0);
-      setCurrentTime(0);
-      setDuration(tracks[0]?.duration || 0);
-      if (tracks[0]) {
-        audio.src = tracks[0].src;
-        audio.load();
-        prefetchLrc(tracks[0].lyrics);
-      } else {
-        audio.removeAttribute('src');
-        audio.load();
-      }
-    }
     if (activeLibrary?.startsWith('qq:')) {
       if (neteasePlaylists[0]) {
         removeImportedTracks(tracks);
@@ -2536,6 +2568,7 @@ export default function App() {
     } else {
       showToast('已清空 QQ 导入曲库');
     }
+    clearProviderPlayback('qq');
   }, [activeLibrary, applyPlaylistChange, neteasePlaylists, showToast]);
 
   const handleNeteaseImport = useCallback((songs, meta) => {
@@ -2550,7 +2583,6 @@ export default function App() {
   const handleNeteaseClear = useCallback(() => {
     const currentWasNetease = activeLibrary?.startsWith('netease:');
     clearNeteaseTracks(tracks);
-    clearPlaybackMemory();
     if (currentWasNetease && qqPlaylists[0]) {
       removeImportedTracks(tracks);
       const switched = switchQQPlaylist(tracks, getActivePlaylistId() || qqPlaylists[0].id);
@@ -2562,6 +2594,7 @@ export default function App() {
       setLibraryVersion(version => version + 1);
       showToast('已清空网易云导入曲库');
     }
+    clearProviderPlayback('netease');
   }, [activeLibrary, applyPlaylistChange, qqPlaylists, showToast]);
 
   const step = direction => {
@@ -2571,6 +2604,11 @@ export default function App() {
   };
 
   const track = tracks[current];
+  const qqCount = qqPlaylists.reduce((total, item) => total + item.count, 0);
+  const neteaseCount = neteasePlaylists.reduce((total, item) => total + item.count, 0);
+  const accounts = { qq: qqAccount, netease: neteaseAccount };
+  const accountProvider = accounts[displayAccount].profile ? displayAccount
+    : qqAccount.profile ? 'qq' : neteaseAccount.profile ? 'netease' : bridgeProvider;
   return (
     <>
       <SvgDefs />
@@ -2586,10 +2624,10 @@ export default function App() {
       <Header
         journal={journal}
         onChangeView={setJournal}
-        onOpenBridge={() => setQQBridgeOpen(true)}
-        onOpenNetease={() => setNeteaseBridgeOpen(true)}
-        qqCount={qqPlaylists.reduce((total, item) => total + item.count, 0)}
-        neteaseCount={neteasePlaylists.reduce((total, item) => total + item.count, 0)}
+        onOpenBridge={() => openBridge(accountProvider)}
+        bridgeOpen={bridgeOpen}
+        profile={accounts[accountProvider].profile}
+        accountProvider={accountProvider}
         playlists={combinedPlaylists}
         activePlaylist={activeLibrary}
         onSwitchPlaylist={handleSwitchPlaylist}
@@ -2617,7 +2655,7 @@ export default function App() {
           soundfield={soundfield}
           libraryVersion={libraryVersion}
           lyricsVersion={lyricsVersion}
-          onOpenBridge={() => setQQBridgeOpen(true)}
+          onOpenBridge={() => openBridge(accountProvider)}
         />
       )}</GlassBackdrop>
       {!journal && (
@@ -2665,10 +2703,20 @@ export default function App() {
         onOutputPick={chooseOutput}
         onPlay={() => {
           if (audioRef.current.paused) startPlayback();
-          else { cancelPlayRef.current = true; audioRef.current.pause(); }
+          else audioRef.current.pause();
         }}
         onStep={step}
-        onSeek={value => { audioRef.current.currentTime = value; setCurrentTime(value); }}
+        onSeek={value => {
+          const audio = audioRef.current;
+          const media = mediaRef.current;
+          if (!media) return;
+          if (media.pendingPosition !== undefined) media.pendingPosition = value;
+          else {
+            audio.currentTime = value;
+            persistPlayback(audio, true);
+          }
+          setCurrentTime(value);
+        }}
         onShuffle={() => { setRandom(value => !value); showToast(random ? '按顺序播放' : '随机漫游已开启'); }}
         onRepeat={() => { setRepeat(value => !value); showToast(repeat ? '播放结束后自动切歌' : '单曲循环'); }}
         onFavorite={() => setLiked(value => {
@@ -2682,25 +2730,22 @@ export default function App() {
         onOpen={() => setSelected(current)}
       />}
       {selected !== null && <DetailDialog track={tracks[selected]} onClose={() => setSelected(null)} onPlay={id => { selectTrack(id, true); setSelected(null); }} />}
-      <QQBridge
-        open={qqBridgeOpen}
-        onClose={() => setQQBridgeOpen(false)}
-        onImport={handleQQImport}
-        onClear={handleQQClear}
-        importedCount={qqPlaylists.reduce((total, item) => total + item.count, 0)}
-        playlists={qqPlaylists}
-        activePlaylistId={activeLibrary?.startsWith('qq:') ? activePlaylist : null}
-        onSwitchPlaylist={id => handleSwitchPlaylist(importedPlaylistKey('qq', id))}
-        onRemovePlaylist={handleRemovePlaylist}
-        sampleSongs={tracks.filter(item => item.provider === 'qq' && item.mid).slice(0, 8)
-          .map(item => ({ mid: item.mid, mediaMid: item.mediaMid, title: item.title }))}
-      />
-      <NeteaseBridge
-        open={neteaseBridgeOpen}
-        onClose={() => setNeteaseBridgeOpen(false)}
-        onImport={handleNeteaseImport}
-        onClear={handleNeteaseClear}
-        importedCount={neteasePlaylists.reduce((total, item) => total + item.count, 0)}
+      <MusicBridge
+        open={bridgeOpen}
+        provider={bridgeProvider}
+        onProviderChange={setBridgeProvider}
+        displayAccount={displayAccount}
+        onDisplayAccountChange={chooseDisplayAccount}
+        onClose={closeBridge}
+        qq={{
+          account: qqAccount, onImport: handleQQImport, onClear: handleQQClear, importedCount: qqCount, playlists: qqPlaylists,
+          activePlaylistId: activeLibrary?.startsWith('qq:') ? activePlaylist : null,
+          onSwitchPlaylist: id => handleSwitchPlaylist(importedPlaylistKey('qq', id)),
+          onRemovePlaylist: handleRemovePlaylist,
+          sampleSongs: tracks.filter(item => item.provider === 'qq' && item.mid).slice(0, 8)
+            .map(item => ({ mid: item.mid, mediaMid: item.mediaMid, title: item.title })),
+        }}
+        netease={{ account: neteaseAccount, onImport: handleNeteaseImport, onClear: handleNeteaseClear, importedCount: neteaseCount }}
       />
       <div id="toast" className={toastText ? 'show' : ''} role="status">{toastText}</div>
       <audio
@@ -2708,18 +2753,24 @@ export default function App() {
         preload="auto"
         onPlay={() => {
           setPlaying(true);
+          const media = mediaRef.current;
+          if (media) saveLastTrack(media.playlist, media.key);
           // iOS 上 AudioContext 的 resume 必须贴近用户手势，播放事件里再兜一次底，
           // 否则会出现「进度在走但没有声音」的假播放状态。
           analysisRef.current.context?.resume?.().catch(() => {});
         }}
-        onPause={() => setPlaying(false)}
-        onTimeUpdate={event => {
-          const time = event.currentTarget.currentTime || 0;
-          setCurrentTime(time);
-          // 断点记忆每 2 秒写一次，够还原又不会一直打本地存储
-          if (Math.floor(time) % 2 === 0) saveProgress(currentRef.current, time);
+        onPause={event => {
+          setPlaying(false);
+          persistPlayback(event.currentTarget, true);
         }}
-        onLoadedMetadata={event => syncDuration(event.currentTarget)}
+        onTimeUpdate={event => {
+          const audio = event.currentTarget;
+          const media = mediaRef.current;
+          if (!media || media.pendingPosition !== undefined || audio.currentSrc !== media.src) return;
+          setCurrentTime(audio.currentTime || 0);
+          if (!audio.paused) persistPlayback(audio);
+        }}
+        onLoadedMetadata={event => restorePosition(event.currentTarget)}
         onDurationChange={event => syncDuration(event.currentTarget)}
         onLoadedData={event => syncDuration(event.currentTarget)}
         onProgress={event => syncDuration(event.currentTarget)}
@@ -2731,8 +2782,11 @@ export default function App() {
           prefetchLrc(next.lyrics);
           prefetchAudio(next.src);
         }}
-        onEnded={() => {
-          if (!tracks.length) return;
+        onEnded={event => {
+          const audio = event.currentTarget;
+          const media = mediaRef.current;
+          if (!tracks.length || !media || audio.currentSrc !== media.src || !audio.ended) return;
+          saveProgress(media.key, 0);
           if (repeat) startPlayback();
           else {
             const next = random ? (current + 1 + Math.floor(Math.random() * (tracks.length - 1))) % tracks.length : current + 1;
@@ -2745,7 +2799,6 @@ export default function App() {
         onWaiting={() => { if (playingRef.current) showToast('正在缓冲音源…'); }}
         onError={() => {
           const track = tracks[currentRef.current];
-          saveProgress(currentRef.current, audioRef.current.currentTime || 0);
           // QQ 音源 404 = QQ 没给播放地址（版权/会员限制），重连一百次也不会有，
           // 把上游的真实原因取出来给用户看，别让"播不了"显得像玄学。
           if (track?.provider === 'qq') {

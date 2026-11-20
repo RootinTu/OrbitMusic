@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { getGlassSurfaceLayout, getGlassSurfaces, observeGlassSurfaces, setGlassSceneActive } from './glassScene.js';
+import { getGlassSurfaceLayout, getGlassSurfaces, observeGlassSurfaces, setGlassSurfaceReady } from './glassScene.js';
 import { createGlassPresentation } from './glassPresentation.js';
 
 /** Upstream's HTML-in-Canvas path: the live scene, not a canvas-only reconstruction. */
@@ -15,7 +15,6 @@ export default function GlassBackdrop({ children, soundfield }) {
     const start = async () => {
       const token = ++generation;
       release(); release = () => {};
-      setGlassSceneActive(false);
       const supported = navigator.gpu && globalThis.GPUQueue?.prototype?.copyElementImageToTexture
         && HTMLCanvasElement.prototype.requestPaint;
       root.dataset.glassRenderer = supported ? 'initializing' : 'css-fallback';
@@ -26,6 +25,7 @@ export default function GlassBackdrop({ children, soundfield }) {
       let device, core, source, canvas, frame, unsubscribe, presentation;
       let lastBackdropCanvas, backdropOpacity = 0;
       const layouts = [];
+      const pendingSurfaces = [];
       let failed = false, active = false, inFlight = false;
       const nodes = new Map();
       const cleanup = () => {
@@ -35,7 +35,7 @@ export default function GlassBackdrop({ children, soundfield }) {
         if (content.parentNode !== mount) mount.append(content);
         content.classList.remove('is-canvas-content');
         mount.classList.remove('is-full-dom');
-        setGlassSceneActive(false);
+        for (const entry of nodes.keys()) setGlassSurfaceReady(entry, false);
         presentation?.destroy(); source?.destroy(); core?.destroy(); canvas?.remove(); device?.destroy();
       };
       const fail = error => {
@@ -114,6 +114,27 @@ export default function GlassBackdrop({ children, soundfield }) {
             shadowOffsetY: 7,
             shadowBlur: 18,
           },
+          dialog: {
+            zIndex: 4,
+            spacing: 0,
+            blur: 14,
+            bezelWidth: 25,
+            thickness: 86,
+            displacementFactor: 0.95,
+            displacementBlur: 5,
+            dispersion: 0.19,
+            ior: 1.54,
+            tint: { r: 0.9, g: 0.95, b: 1, a: 0.045 },
+            specularOpacity: 0.9,
+            specularStrength: 1.28,
+            specularWidth: 1.45,
+            specularSharpness: 3,
+            oppositeSpecularStrength: 0.8,
+            reflectionOffset: 22,
+            shadowColor: { r: 0, g: 0, b: 0, a: 0.26 },
+            shadowOffsetY: 14,
+            shadowBlur: 32,
+          },
           subtle: {
             zIndex: 3,
             spacing: 0,
@@ -136,6 +157,9 @@ export default function GlassBackdrop({ children, soundfield }) {
             shadowBlur: 12,
           },
         };
+        // Render the bridge's panes and pills above its outer refraction.
+        CONTAINER_PRESETS['dialog-pane'] = { ...CONTAINER_PRESETS.control, zIndex: 5 };
+        CONTAINER_PRESETS['dialog-control'] = { ...CONTAINER_PRESETS.control, zIndex: 6 };
         const containers = Object.fromEntries(
           Object.entries(CONTAINER_PRESETS).map(([key, preset]) => {
             const container = new Container(preset);
@@ -172,6 +196,7 @@ export default function GlassBackdrop({ children, soundfield }) {
               background.width = innerWidth; background.height = innerHeight;
             }
             layouts.length = 0;
+            pendingSurfaces.length = 0;
             for (const entry of getGlassSurfaces()) {
               const layout = getGlassSurfaceLayout(entry);
               let glass = nodes.get(entry);
@@ -179,9 +204,11 @@ export default function GlassBackdrop({ children, soundfield }) {
                 // A hidden/collapsed control must leave the SDF entirely. A
                 // zero-size shape can still affect nearby fusion and highlights.
                 if (glass) { glass.remove(); nodes.delete(entry); }
+                setGlassSurfaceReady(entry, false);
                 continue;
               }
               layouts.push(layout);
+              if (!entry.ready) pendingSurfaces.push(entry);
               if (!glass) {
                 glass = new Glass({ ...layout, pointerEvents: false });
                 containers[entry.options.variant].add(glass);
@@ -210,11 +237,14 @@ export default function GlassBackdrop({ children, soundfield }) {
             } else if (!presentation) {
               core.render({ ...frameOptions, outputTexture: context.getCurrentTexture() });
             }
-            device.queue.onSubmittedWorkDone().then(() => { inFlight = false; }, fail);
-            if (!active && snapshot?.copiedDeviceWidth > 0) {
-              active = true; root.dataset.glassRenderer = 'full-dom';
-              setGlassSceneActive(true);
-            }
+            device.queue.onSubmittedWorkDone().then(() => {
+              if (failed || disposed || token !== generation) return;
+              if (snapshot?.copiedDeviceWidth > 0) {
+                if (!active) { active = true; root.dataset.glassRenderer = 'full-dom'; }
+                for (const entry of pendingSurfaces) setGlassSurfaceReady(entry, true);
+              }
+              inFlight = false;
+            }, fail);
             if (!active && time - started > 4000) {
               throw new Error('HTML-in-Canvas did not produce a complete backdrop texture');
             }

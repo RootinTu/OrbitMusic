@@ -89,66 +89,6 @@ export function supportsContextSink(context) {
   return typeof context?.setSinkId === 'function';
 }
 
-// ——— 断点续播：每首歌听到哪里记到哪里，下次打开自动接回去 ———
-const PROGRESS_KEY = 'aimusic.progress';
-const RESUME_MIN = 5;   // 少于 5 秒的位置没什么记忆价值
-const RESUME_TAIL = 8;  // 快放完了也别再续播
-
-export function readProgress() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(PROGRESS_KEY));
-    return raw && typeof raw === 'object' ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-export function saveProgress(trackId, time) {
-  if (!(time > RESUME_MIN)) return;
-  try {
-    const all = readProgress();
-    all[trackId] = Math.round(time * 10) / 10;
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(all));
-  } catch { /* 隐私模式写不了，忽略 */ }
-}
-
-// ——— 上次听到哪一首 ———
-// 原来只按曲目记播放位置，却没记「最后听的是哪一首」，
-// 于是刷新后永远回到 01，续播等于白做。这里补上曲目本身。
-const LAST_TRACK_KEY = 'aimusic.lastTrack';
-
-export function readLastTrack() {
-  try {
-    const value = Number(JSON.parse(localStorage.getItem(LAST_TRACK_KEY)));
-    return Number.isInteger(value) && value >= 0 ? value : 0;
-  } catch {
-    return 0;
-  }
-}
-
-export function saveLastTrack(index) {
-  if (!Number.isInteger(index) || index < 0) return;
-  try {
-    localStorage.setItem(LAST_TRACK_KEY, JSON.stringify(index));
-  } catch { /* 隐私模式写不了就算了 */ }
-}
-
-export function clearPlaybackMemory() {
-  try {
-    localStorage.removeItem(PROGRESS_KEY);
-    localStorage.removeItem(LAST_TRACK_KEY);
-  } catch { /* 清理失败不影响当前会话 */ }
-}
-
-// 返回应当恢复到第几秒；不到续播门槛就返回 0
-export function resumeAt(trackId, duration) {
-  const saved = Number(readProgress()[trackId]);
-  if (!saved || !Number.isFinite(saved)) return 0;
-  if (saved < RESUME_MIN) return 0;
-  if (duration && saved > duration - RESUME_TAIL) return 0;
-  return saved;
-}
-
 // 把声音送到指定设备。只在明确指定了设备时才动手。
 // 没指定（跟随系统默认）时**完全不要调 setSinkId**：一旦调用，浏览器就会重新协商
 // 音频输出链路，外接音箱尤其是蓝牙会被打断，表现就是「又得重连一次」。

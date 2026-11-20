@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import GlassSurface from './GlassSurface.jsx';
+import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
+import MusicAccountAvatar, { MusicAccountAvatarPicker } from './MusicAccountAvatar.jsx';
+import { musicAccountName } from './musicAccounts.js';
 import { LOOSE_PLAYLIST_ID, MAX_QQ_IMPORTS, MAX_QQ_PLAYLISTS } from './qqLibrary.js';
 
 async function requestJson(url, options) {
@@ -52,12 +55,11 @@ function verdictLabel(verdict) {
 }
 
 export default function QQBridge({
-  open, onClose, onImport, onClear, importedCount,
+  open, account, onImport, onClear, importedCount,
   playlists = [], activePlaylistId = null, onSwitchPlaylist, onRemovePlaylist,
   sampleSongs = [],
 }) {
-  const panelRef = useRef(null);
-  const [profile, setProfile] = useState({ loggedIn: false });
+  const { profile, refresh, update, setAvatar } = account;
   const [query, setQuery] = useState('');
   const [playlistInput, setPlaylistInput] = useState('');
   const [results, setResults] = useState([]);
@@ -72,7 +74,7 @@ export default function QQBridge({
   const [checkRows, setCheckRows] = useState([]);
   const [checkRunning, setCheckRunning] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
-  const [playlistView, setPlaylistView] = useState('local');
+  const [playlistView, setPlaylistView] = useState(() => playlists.length ? 'local' : 'account');
   const desktop = Boolean(window.orbitDesktop?.isDesktop);
 
   const songKey = (song, index) => `${song?.mid || song?.id || index}`;
@@ -85,7 +87,7 @@ export default function QQBridge({
   const playlistFull = !previewPlaylist && playlists.length >= MAX_QQ_PLAYLISTS;
 
   const statusText = useMemo(() => {
-    if (profile.loggedIn) return profile.nickname || `音乐账号 ${profile.userId || ''}`.trim();
+    if (profile?.loggedIn) return musicAccountName(profile, 'qq');
     return desktop ? '等待音乐账号登录' : '网页版可搜索，桌面版支持账号歌单';
   }, [desktop, profile]);
   // 自检结论：把「要付费的歌一律被拒」和「连免费歌都拿不到」区分开——
@@ -115,17 +117,6 @@ export default function QQBridge({
   ]), [accountPlaylists]);
   const createdCount = playlistGroups[0].items.length;
 
-  const refreshStatus = async () => {
-    try {
-      const next = await requestJson('/api/qq/login/status');
-      setProfile(next);
-      return next;
-    } catch {
-      setProfile({ loggedIn: false });
-      return { loggedIn: false };
-    }
-  };
-
   const loadPlaylists = async () => {
     setBusy('playlists');
     setError('');
@@ -141,16 +132,13 @@ export default function QQBridge({
   };
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) return;
     setClearArmed(false);
     setCheckOpen(false);
-    setPlaylistView(playlists.length ? 'local' : 'account');
-    refreshStatus().then(next => { if (next.loggedIn) loadPlaylists(); });
-    const onKey = event => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    requestAnimationFrame(() => panelRef.current?.focus());
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+    const controller = new AbortController();
+    refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
+    return () => controller.abort();
+  }, [open, refresh]);
 
   const login = async () => {
     if (!desktop) {
@@ -162,8 +150,8 @@ export default function QQBridge({
     try {
       const result = await window.orbitDesktop.openQQLogin();
       if (!result?.ok) throw new Error(result?.message || result?.error || '登录未完成');
-      setProfile(result.profile || { loggedIn: true });
-      await loadPlaylists();
+      if (result.profile) update(result.profile);
+      await Promise.all([refresh(), loadPlaylists()]);
     } catch (reason) {
       setError(reason.message);
     } finally {
@@ -177,7 +165,7 @@ export default function QQBridge({
     try {
       if (desktop) await window.orbitDesktop.clearQQLogin();
       else await requestJson('/api/qq/logout', { method: 'POST' });
-      setProfile({ loggedIn: false });
+      update(null);
       setAccountPlaylists([]);
     } catch (reason) {
       setError(reason.message);
@@ -331,27 +319,28 @@ export default function QQBridge({
 
   if (!open) return null;
   return (
-    <div className="bridge-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="qq-bridge liquid-panel" ref={panelRef} tabIndex="-1" role="dialog" aria-modal="true" aria-label="QQ 音乐桥">
-        <GlassSurface variant="player" />
-        <header className="bridge-head">
-          <div>
-            <span className="eyebrow">ORBIT BRIDGE / QQ MUSIC</span>
-            <h2>把账号里的声音，投进音乐宇宙。</h2>
-          </div>
-          <button className="bridge-close" onClick={onClose} aria-label="关闭 QQ 音乐桥">×</button>
-        </header>
-
+      <>
         <div className="bridge-status">
-          <span className={`bridge-pulse ${profile.loggedIn ? 'online' : ''}`} />
-          <div><strong>{statusText}</strong><small>{profile.loggedIn ? '登录态保存在桌面应用的独立安全会话中' : '搜索无需登录；登录页可选择 QQ 或微信'}</small></div>
-          {profile.loggedIn
-            ? <button onClick={logout} disabled={Boolean(busy)}>退出</button>
-            : <button onClick={login} disabled={busy === 'login'}>{busy === 'login' ? '等待登录…' : '登录音乐账号'}</button>}
+          <GlassSurface variant="dialog-pane" />
+          {profile ? <MusicAccountAvatar profile={profile} /> : <span className="bridge-pulse" />}
+          <div>
+            <strong title={statusText}>{statusText}</strong>
+            <small>{profile?.nicknameAvailable === false
+              ? `${profile.loginMethod === 'wechat' ? '微信登录' : '已登录 QQ 音乐'} · 平台暂未返回昵称`
+              : profile ? '已登录 QQ 音乐' : '搜索无需登录，可选择 QQ 或微信登录'}</small>
+            {profile?.localAvatar && <button type="button" className="bridge-avatar-reset" onClick={() => {
+              try { setAvatar(''); } catch { setError('无法恢复平台头像，请重试。'); }
+            }}>使用平台头像</button>}
+          </div>
+          {setAvatar && <MusicAccountAvatarPicker localAvatar={profile.localAvatar} onChange={setAvatar} onError={setError} />}
+          {profile
+            ? <BridgeGlassButton onClick={logout} disabled={Boolean(busy)}>退出</BridgeGlassButton>
+            : <BridgeGlassButton onClick={login} disabled={busy === 'login'}>{busy === 'login' ? '等待登录…' : '登录音乐账号'}</BridgeGlassButton>}
         </div>
 
-        {profile.loggedIn && (
+        {profile && (
           <div className={`bridge-check ${checkOpen ? 'open' : ''}`}>
+            <GlassSurface variant="dialog-pane" />
             <button className="bridge-check-toggle" onClick={() => setCheckOpen(value => !value)} aria-expanded={checkOpen}>
               <span><strong>播放权限自检</strong><small>用当前歌单的歌问 QQ：要不要付费、给不给地址</small></span>
               <b>{checkRows.length ? `${checkRows.length} 首` : '按需检查'}</b>
@@ -359,7 +348,7 @@ export default function QQBridge({
             </button>
             {checkOpen && (
               <div className="bridge-check-body">
-                <button className="bridge-check-run" onClick={runSelfCheck} disabled={checkRunning || Boolean(busy)}>{checkRunning ? '检测中…' : '开始检测'}</button>
+                <BridgeGlassButton className="bridge-check-run" onClick={runSelfCheck} disabled={checkRunning || Boolean(busy)}>{checkRunning ? '检测中…' : '开始检测'}</BridgeGlassButton>
                 {checkSummary ? <p className="bridge-check-summary">{checkSummary}</p> : <p className="bridge-check-summary">遇到会员歌曲无法播放时，再运行这项检查。</p>}
                 {checkRows.length > 0 && (
                   <ul className="bridge-check-list">
@@ -379,10 +368,11 @@ export default function QQBridge({
 
         <div className="bridge-grid">
           <div className="bridge-pane bridge-search">
+            <GlassSurface variant="dialog-pane" />
             <span className="bridge-label">搜索歌曲</span>
             <form onSubmit={search} className="bridge-input-row">
-              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="歌名、歌手" aria-label="搜索 QQ 音乐" />
-              <button type="submit" disabled={busy === 'search'}>{busy === 'search' ? '搜索中' : '搜索'}</button>
+              <BridgeGlassInput value={query} onChange={event => setQuery(event.target.value)} placeholder="歌名、歌手" aria-label="搜索 QQ 音乐" />
+              <BridgeGlassButton type="submit" disabled={busy === 'search'}>{busy === 'search' ? '搜索中' : '搜索'}</BridgeGlassButton>
             </form>
             <div className="bridge-results">
               {results.map(song => (
@@ -397,6 +387,7 @@ export default function QQBridge({
           </div>
 
           <div className="bridge-pane bridge-library">
+            <GlassSurface variant="dialog-pane" />
             <div className="bridge-pane-title">
               <span className="bridge-label">导入歌单</span>
               <small>每个歌单最多 {MAX_QQ_IMPORTS} 首</small>
@@ -404,7 +395,7 @@ export default function QQBridge({
             {preview ? (
               <div className="bridge-preview">
                 <div className="bridge-preview-head">
-                  <button className="bridge-preview-back" onClick={closePreview} aria-label="返回歌单列表">←</button>
+                  <BridgeGlassButton className="bridge-preview-back" onClick={closePreview} aria-label="返回歌单列表">←</BridgeGlassButton>
                   <span>
                     <strong>{preview.name}</strong>
                     <small>取到 {preview.loadedCount} 首{preview.trackCount > preview.loadedCount ? ` / 共 ${preview.trackCount} 首` : ''}</small>
@@ -412,8 +403,8 @@ export default function QQBridge({
                 </div>
                 <div className="bridge-preview-actions">
                   <span>已选 {selected.size} 首 · 还能装 {previewRoom - selected.size} 首</span>
-                  <button onClick={selectAll} disabled={previewRoom <= 0}>全选可装的</button>
-                  <button onClick={() => setSelected(new Set())} disabled={!selected.size}>清空</button>
+                  <BridgeGlassButton onClick={selectAll} disabled={previewRoom <= 0}>全选可装的</BridgeGlassButton>
+                  <BridgeGlassButton onClick={() => setSelected(new Set())} disabled={!selected.size}>清空</BridgeGlassButton>
                 </div>
                 <div className="bridge-preview-list">
                   {preview.songs.map((song, index) => {
@@ -433,26 +424,26 @@ export default function QQBridge({
                     );
                   })}
                 </div>
-                <button className="bridge-preview-import" onClick={importSelected} disabled={!selected.size}>
+                <BridgeGlassButton className="bridge-preview-import" onClick={importSelected} disabled={!selected.size}>
                   导入所选 {selected.size} 首
-                </button>
+                </BridgeGlassButton>
               </div>
             ) : (
               <>
                 <div className="bridge-link-import">
                   <div className="bridge-input-row">
-                    <input value={playlistInput} onChange={event => setPlaylistInput(event.target.value)} placeholder="粘贴歌单链接或 ID" aria-label="QQ 音乐歌单链接" />
-                    <button onClick={() => openPlaylist(playlistInput)} disabled={busy.startsWith('playlist:') || playlistFull}>打开</button>
+                    <BridgeGlassInput value={playlistInput} onChange={event => setPlaylistInput(event.target.value)} placeholder="粘贴歌单链接或 ID" aria-label="QQ 音乐歌单链接" />
+                    <BridgeGlassButton onClick={() => openPlaylist(playlistInput)} disabled={busy.startsWith('playlist:') || playlistFull}>打开</BridgeGlassButton>
                   </div>
                 </div>
 
                 <div className="bridge-library-tabs" role="tablist" aria-label="歌单来源">
-                  <button className={playlistView === 'local' ? 'active' : ''} onClick={() => setPlaylistView('local')} role="tab" aria-selected={playlistView === 'local'}>
+                  <BridgeGlassButton className={playlistView === 'local' ? 'active' : ''} onClick={() => setPlaylistView('local')} role="tab" aria-selected={playlistView === 'local'}>
                     本机歌单 <span>{playlists.length}</span>
-                  </button>
-                  <button className={playlistView === 'account' ? 'active' : ''} onClick={() => setPlaylistView('account')} role="tab" aria-selected={playlistView === 'account'}>
+                  </BridgeGlassButton>
+                  <BridgeGlassButton className={playlistView === 'account' ? 'active' : ''} onClick={() => setPlaylistView('account')} role="tab" aria-selected={playlistView === 'account'}>
                     音乐账号 <span>{accountPlaylists.length}</span>
-                  </button>
+                  </BridgeGlassButton>
                 </div>
 
                 <div className="bridge-playlists">
@@ -485,14 +476,14 @@ export default function QQBridge({
                           ))}
                         </section>
                       ))}
-                      {!profile.loggedIn && <div className="bridge-empty">连接桌面账号后，这里会显示“我喜欢”和创建、收藏的歌单。</div>}
-                      {profile.loggedIn && !accountPlaylists.length && (
+                      {!profile && <div className="bridge-empty">连接桌面账号后，这里会显示“我喜欢”和创建、收藏的歌单。</div>}
+                      {profile && !accountPlaylists.length && (
                         <div className="bridge-empty">
                           QQ 音乐暂未返回账号歌单；也可以粘贴自建歌单链接或 ID。
                           {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
                         </div>
                       )}
-                      {profile.loggedIn && accountPlaylists.length > 0 && !createdCount && (
+                      {profile && accountPlaylists.length > 0 && !createdCount && (
                         <div className="bridge-empty">
                           没有读到“我创建的歌单”，只显示了收藏部分。
                           {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
@@ -508,7 +499,7 @@ export default function QQBridge({
 
         <footer className="bridge-foot">
           <span>{importedCount} 首歌曲 · {playlists.length}/{MAX_QQ_PLAYLISTS} 个歌单已在本机</span>
-          <button
+          <BridgeGlassButton
             className={`bridge-clear ${clearArmed ? 'armed' : ''}`}
             disabled={!importedCount}
             onClick={() => {
@@ -522,11 +513,10 @@ export default function QQBridge({
               setResults([]);
               setError('QQ 导入曲库已清空。');
             }}
-          >{clearArmed ? '确认清空' : '清空已导入'}</button>
+          >{clearArmed ? '确认清空' : '清空已导入'}</BridgeGlassButton>
           <span>播放能力取决于账号版权、会员与地区状态</span>
         </footer>
         {error && <div className="bridge-error" role="status">{error}</div>}
-      </section>
-    </div>
+      </>
   );
 }

@@ -1,8 +1,7 @@
 // One registry shared by the full-scene renderer and the DOM control surfaces.
 const surfaces = new Set();
 const subscribers = new Set();
-let active = false;
-const variants = new Set(['player', 'control', 'subtle']);
+const variants = new Set(['player', 'control', 'subtle', 'dialog', 'dialog-pane', 'dialog-control']);
 
 export function resolveGlassVariant({ variant, subtle, control } = {}) {
   return variants.has(variant) ? variant : subtle ? 'subtle' : control ? 'control' : 'player';
@@ -26,14 +25,14 @@ export function registerGlassSurface(element, options, onReady) {
   // Track the outer panel, not its inset span: scrolling menu contents must not
   // move the optical surface, and the border box is the actual rounded contour.
   const target = options.trackElement?.current || options.trackElement || element.parentElement || element;
-  const entry = { element, target, options: { ...options, variant: resolveGlassVariant(options) }, onReady, dirty: true };
+  const entry = { element, target, options: { ...options, variant: resolveGlassVariant(options) }, onReady, dirty: true, ready: false };
   const resize = new ResizeObserver(invalidateLayout);
   resize.observe(target);
   const mutation = new MutationObserver(invalidateLayout);
   mutation.observe(target, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
   if (!surfaces.size) observeViewport(true);
   surfaces.add(entry);
-  onReady(active);
+  onReady(false);
   for (const notify of subscribers) notify();
   return () => {
     resize.disconnect();
@@ -57,7 +56,8 @@ export function getGlassSurfaceLayout(entry) {
   }
   const limit = Math.min(rect.width, rect.height) / 2;
   const cssRadius = parseFloat(entry.radius) || 0;
-  const radius = options.cornerRadius ?? (options.variant === 'control' ? limit
+  const capsule = options.variant === 'control' || options.variant === 'dialog-control';
+  const radius = options.cornerRadius ?? (capsule ? limit
     : entry.radius?.includes('%') ? cssRadius * Math.min(rect.width, rect.height) / 100 : cssRadius);
   return {
     x: rect.x, y: rect.y, width: rect.width, height: rect.height,
@@ -70,8 +70,8 @@ export function observeGlassSurfaces(notify) {
   subscribers.add(notify);
   return () => subscribers.delete(notify);
 }
-export function setGlassSceneActive(value) {
-  if (active === value) return;
-  active = value;
-  for (const entry of surfaces) entry.onReady(value);
+export function setGlassSurfaceReady(entry, ready) {
+  if (!surfaces.has(entry) || entry.ready === ready) return;
+  entry.ready = ready;
+  entry.onReady(ready);
 }

@@ -22,8 +22,7 @@ await page.addInitScript(() => {
       ],
     }],
   }));
-  // QQ 歌曲是追加在本地 19 首之后的，把续播位置指到第一首 QQ 歌上，播放栏才会显示它的信息
-  localStorage.setItem('aimusic.lastTrack', '19');
+  localStorage.setItem('orbit.playback.lastTrack.v2', JSON.stringify({ 'qq:smoke': 'qq:AAAAAAAA' }));
 });
 
 await page.goto(url, { waitUntil: 'domcontentloaded' });

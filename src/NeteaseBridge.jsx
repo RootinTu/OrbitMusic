@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import GlassSurface from './GlassSurface.jsx';
+import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
+import MusicAccountAvatar from './MusicAccountAvatar.jsx';
+import { musicAccountName } from './musicAccounts.js';
 import { MAX_NETEASE_IMPORTS } from './neteaseLibrary.js';
 
 async function requestJson(url, options) {
@@ -13,9 +16,8 @@ function Art({ src, title }) {
   return src ? <img src={src} alt={`${title} 封面`} draggable="false" /> : <span className="bridge-art-fallback">♫</span>;
 }
 
-export default function NeteaseBridge({ open, onClose, onImport, onClear, importedCount }) {
-  const panelRef = useRef(null);
-  const [profile, setProfile] = useState({ loggedIn: false });
+export default function NeteaseBridge({ open, account, onClose, onImport, onClear, importedCount }) {
+  const { profile, refresh, update } = account;
   const [playlists, setPlaylists] = useState([]);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -30,29 +32,18 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
     setBusy('playlists');
     try {
       const payload = await requestJson('/api/netease/user/playlists');
-      setProfile(payload.profile || { loggedIn: true });
       setPlaylists(payload.playlists || []);
     } catch (reason) { setError(reason.message); }
     finally { setBusy(''); }
   };
 
-  const refreshStatus = async () => {
-    try {
-      const next = await requestJson('/api/netease/login/status');
-      setProfile(next);
-      if (next.loggedIn) await loadPlaylists();
-    } catch { setProfile({ loggedIn: false }); }
-  };
-
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open) return;
     setError('');
-    refreshStatus();
-    const onKey = event => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    requestAnimationFrame(() => panelRef.current?.focus());
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+    const controller = new AbortController();
+    refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
+    return () => controller.abort();
+  }, [open, refresh]);
 
   const login = async () => {
     if (!desktop) return setError('扫码登录仅在 ORBIT 桌面应用中开放。');
@@ -60,7 +51,8 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
     try {
       const result = await window.orbitDesktop.openNeteaseLogin();
       if (!result?.ok) throw new Error(result?.message || result?.error || '扫码登录未完成');
-      setProfile(result.profile || { loggedIn: true });
+      if (result.profile) update(result.profile);
+      else await refresh();
       await loadPlaylists();
     } catch (reason) { setError(reason.message); }
     finally { setBusy(''); }
@@ -71,7 +63,7 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
     try {
       if (desktop) await window.orbitDesktop.clearNeteaseLogin();
       else await requestJson('/api/netease/logout', { method: 'POST' });
-      setProfile({ loggedIn: false }); setPlaylists([]); setPreview(null);
+      update(null); setPlaylists([]); setPreview(null);
     } catch (reason) { setError(reason.message); }
     finally { setBusy(''); }
   };
@@ -113,24 +105,20 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
 
   if (!open) return null;
   return (
-    <div className="bridge-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="qq-bridge netease-bridge liquid-panel" ref={panelRef} tabIndex="-1" role="dialog" aria-modal="true" aria-label="网易云音乐桥">
-        <GlassSurface variant="player" />
-        <div className="bridge-head">
-          <div><span className="eyebrow">NETEASE CLOUD MUSIC</span><h2>网易云音乐桥</h2></div>
-          <button className="bridge-close" onClick={onClose} aria-label="关闭">×</button>
-        </div>
+      <>
         <div className="bridge-status">
-          <span className={`bridge-pulse ${profile.loggedIn ? 'online' : ''}`} />
-          <div><strong>{profile.loggedIn ? (profile.nickname || '已连接网易云音乐') : '等待扫码登录'}</strong><small>独立安全会话 · 仅同步 MUSIC_U 登录凭据</small></div>
-          <button onClick={profile.loggedIn ? logout : login} disabled={Boolean(busy)}>{busy === 'login' ? '等待扫码…' : profile.loggedIn ? '退出登录' : '扫码登录'}</button>
+          <GlassSurface variant="dialog-pane" />
+          {profile ? <MusicAccountAvatar profile={profile} /> : <span className="bridge-pulse" />}
+          <div><strong title={profile ? musicAccountName(profile, 'netease') : undefined}>{profile ? musicAccountName(profile, 'netease') : '等待扫码登录'}</strong><small>{profile ? '已登录网易云音乐' : '扫码后可读取账号歌单'}</small></div>
+          <BridgeGlassButton onClick={profile ? logout : login} disabled={Boolean(busy)}>{busy === 'login' ? '等待扫码…' : profile ? '退出登录' : '扫码登录'}</BridgeGlassButton>
         </div>
         <div className="bridge-grid">
           <div className="bridge-pane">
+            <GlassSurface variant="dialog-pane" />
             <span className="bridge-label">搜索网易云</span>
             <form className="bridge-input-row" onSubmit={search}>
-              <input value={query} onChange={event => setQuery(event.target.value)} placeholder="歌曲 / 歌手 / 专辑" />
-              <button disabled={busy === 'search'}>{busy === 'search' ? '搜索中' : '搜索'}</button>
+              <BridgeGlassInput value={query} onChange={event => setQuery(event.target.value)} placeholder="歌曲 / 歌手 / 专辑" aria-label="搜索网易云音乐" />
+              <BridgeGlassButton type="submit" disabled={busy === 'search'}>{busy === 'search' ? '搜索中' : '搜索'}</BridgeGlassButton>
             </form>
             <div className="bridge-results">
               {results.map(song => <div className="bridge-song" key={song.id}>
@@ -142,20 +130,20 @@ export default function NeteaseBridge({ open, onClose, onImport, onClear, import
             </div>
           </div>
           <div className="bridge-pane bridge-library">
+            <GlassSurface variant="dialog-pane" />
             {preview ? <>
-              <div className="bridge-preview-head"><button className="bridge-preview-back" onClick={() => setPreview(null)}>←</button><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
-              <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><button onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 30 首</button><button onClick={() => setSelected(new Set())}>清空</button></div>
+              <div className="bridge-preview-head"><BridgeGlassButton className="bridge-preview-back" onClick={() => setPreview(null)} aria-label="返回歌单列表">←</BridgeGlassButton><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
+              <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><BridgeGlassButton onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 30 首</BridgeGlassButton><BridgeGlassButton onClick={() => setSelected(new Set())}>清空</BridgeGlassButton></div>
               <div className="bridge-preview-list">{preview.songs.map(song => <label className={`bridge-preview-row ${selected.has(song.id) ? 'checked' : ''}`} key={song.id}><input type="checkbox" checked={selected.has(song.id)} onChange={() => toggle(song.id)} /><b>{song.name}</b><small>{song.artist} · {song.album}</small></label>)}</div>
-              <button className="bridge-preview-import" disabled={!selected.size} onClick={importPreview}>导入 {selected.size} 首到音乐宇宙</button>
+              <BridgeGlassButton className="bridge-preview-import" disabled={!selected.size} onClick={importPreview}>导入 {selected.size} 首到音乐宇宙</BridgeGlassButton>
             </> : <>
-              <div className="bridge-pane-title"><span className="bridge-label">我的歌单</span><small>{profile.loggedIn ? `${playlists.length} 个歌单` : '扫码后读取'}</small></div>
+              <div className="bridge-pane-title"><span className="bridge-label">我的歌单</span><small>{profile ? `${playlists.length} 个歌单` : '扫码后读取'}</small></div>
               <div className="bridge-playlists">{playlists.map(playlist => <button className="bridge-playlist" key={playlist.id} onClick={() => openPlaylist(playlist)} disabled={Boolean(busy)}><Art src={playlist.cover} title={playlist.name} /><span><strong>{playlist.name}</strong><small>{playlist.trackCount} 首{playlist.subscribed ? ' · 收藏' : ''}</small></span><b>{busy === `playlist:${playlist.id}` ? '读取中' : '打开'}</b></button>)}{!playlists.length && <div className="bridge-empty">完成扫码后，这里会显示账号中的歌单和「我喜欢的音乐」。</div>}</div>
             </>}
           </div>
         </div>
-        <div className="bridge-foot"><span>每个歌单最多 {MAX_NETEASE_IMPORTS} 首 · 不保存账号密码</span><span>本机歌单共 {importedCount} 首</span>{importedCount > 0 && <button className="bridge-clear" onClick={onClear}>清空网易云曲库</button>}</div>
+        <div className="bridge-foot"><span>每个歌单最多 {MAX_NETEASE_IMPORTS} 首 · 不保存账号密码</span><span>本机歌单共 {importedCount} 首</span>{importedCount > 0 && <BridgeGlassButton className="bridge-clear" onClick={onClear}>清空网易云曲库</BridgeGlassButton>}</div>
         {error && <div className="bridge-error">{error}</div>}
-      </section>
-    </div>
+      </>
   );
 }
