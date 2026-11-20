@@ -2,7 +2,7 @@
 
 在音乐宇宙里漫游的桌面播放器。使用 React、Electron、WebGL 声波地形与 Liquid DOM 液态玻璃，将歌单、歌词和实时律动放在同一个空间里。
 
-**当前版本：2.1.6** · [下载 Windows 版](https://github.com/hb1234567898/aimusic/releases/latest) · [更新记录](CHANGELOG.md)
+**当前版本：2.1.6** · [下载 Windows 版](https://github.com/RootinTu/OrbitMusic/releases/latest) · [更新记录](CHANGELOG.md)
 
 ## 应用截图
 
@@ -32,7 +32,7 @@
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/hb1234567898/aimusic/releases/latest) 下载 Windows x64 安装版、便携 EXE 或 ZIP 解压版。
+1. 从 [Releases](https://github.com/RootinTu/OrbitMusic/releases/latest) 下载 Windows x64 安装版、便携 EXE 或 ZIP 解压版。
 2. ZIP 版须完整解压，保留 `resources`、`locales` 和 DLL 等文件，再运行 `ORBIT Music.exe`。
 3. 点击顶部 **音乐桥**。QQ 音乐、网易云音乐可登录账号后搜索或导入歌单；酷狗音乐在桌面版通过官网登录后，回到音乐桥读取账号的网络收藏歌单。
 4. 每个歌单最多导入 **30 首**，通过顶部歌单菜单切换当前播放列表。
