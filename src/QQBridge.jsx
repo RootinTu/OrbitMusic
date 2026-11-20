@@ -55,7 +55,7 @@ function verdictLabel(verdict) {
 }
 
 export default function QQBridge({
-  open, account, onImport, onClear, importedCount,
+  open, account, browseAccountPlaylists, onImport, onClear, importedCount,
   playlists = [], activePlaylistId = null, onSwitchPlaylist, onRemovePlaylist,
   sampleSongs = [],
 }) {
@@ -135,10 +135,15 @@ export default function QQBridge({
     if (!open) return;
     setClearArmed(false);
     setCheckOpen(false);
+    if (browseAccountPlaylists) {
+      setPlaylistView('account');
+      setPreview(null);
+      setSelected(new Set());
+    }
     const controller = new AbortController();
     refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
     return () => controller.abort();
-  }, [open, refresh]);
+  }, [browseAccountPlaylists, open, refresh]);
 
   const login = async () => {
     if (!desktop) {

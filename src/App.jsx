@@ -153,6 +153,8 @@ function SvgDefs() {
         <symbol id="i-orbit" viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="18" ry="8" transform="rotate(-35 20 20)" /><circle cx="20" cy="20" r="5" fill="currentColor" stroke="none" /></symbol>
         <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 6h3c5 0 7 12 12 12h3m-4-4 4 4-4 4M3 18h3c2 0 4-3 5-5m3-4c1-2 2-3 4-3h3m-4-4 4 4-4 4" /></symbol>
         <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" strokeWidth="2" /></symbol>
+        <symbol id="i-account-switch" viewBox="0 0 24 24"><path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></symbol>
+        <symbol id="i-more" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth="3" strokeLinecap="round" /></symbol>
         <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M4 10v4M8 6.5v11M12 3.5v17M16 8v8M20 11v2" strokeWidth="2" strokeLinecap="round" /></symbol>
       </defs>
     </svg>
@@ -395,8 +397,14 @@ function useUpdater() {
   return { supported, state, version, check, download, install, dismiss };
 }
 
-function Header({ journal, onChangeView, onOpenBridge, bridgeOpen, profile, accountProvider, playlists, activePlaylist, onSwitchPlaylist, updater }) {
+function Header({
+  journal, onChangeView, onOpenBridge, bridgeOpen, profile, accountProvider, nextAccount,
+  onSwitchAccount, playlists, activePlaylist, onSwitchPlaylist, updater,
+}) {
   const accountName = profile ? musicAccountName(profile, accountProvider) : '';
+  const manageLabel = profile ? '管理音乐账号' : '登录';
+  const switchLabel = nextAccount ? `切换到${nextAccount === 'qq' ? ' QQ 音乐' : '网易云音乐'}歌单` : '';
+  const dialogProps = { 'aria-haspopup': 'dialog', 'aria-expanded': bridgeOpen, 'aria-controls': 'music-bridge' };
   return (
     <header>
       {window.orbitDesktop?.platform !== 'win32' ? (
@@ -412,13 +420,24 @@ function Header({ journal, onChangeView, onOpenBridge, bridgeOpen, profile, acco
       <div className="header-right">
         <PlaylistSwitch playlists={playlists} activePlaylist={activePlaylist} onSwitchPlaylist={onSwitchPlaylist} />
         <div className="edition">
-          <button className="bridge-launch liquid-control" onClick={onOpenBridge} aria-haspopup="dialog"
-            aria-expanded={bridgeOpen} aria-controls="music-bridge" title={accountName || '登录'}
-            aria-label={accountName ? `管理音乐账号 ${accountName}` : '登录'}>
-            <GlassSurface control />
-            {profile && <MusicAccountAvatar profile={profile} />}
-            <span className="bridge-launch-label">{accountName || '登录'}</span>
-          </button>
+          <div className="bridge-account-controls">
+            <button type="button" className="bridge-launch liquid-control" onClick={nextAccount ? onSwitchAccount : onOpenBridge}
+              {...(nextAccount ? {} : dialogProps)}
+              title={switchLabel || accountName || manageLabel}
+              aria-label={accountName ? `${accountName} · ${switchLabel || manageLabel}` : manageLabel}>
+              <GlassSurface control />
+              {profile && <MusicAccountAvatar profile={profile} />}
+              <span className="bridge-launch-label">{accountName || '登录'}</span>
+              {nextAccount && <Icon name="account-switch" className="bridge-account-switch-icon" />}
+            </button>
+            {nextAccount && (
+              <button type="button" className="bridge-account-manage liquid-control" onClick={onOpenBridge}
+                {...dialogProps} title={manageLabel} aria-label={manageLabel}>
+                <GlassSurface control />
+                <Icon name="more" />
+              </button>
+            )}
+          </div>
           {updater.supported && <button className="version-chip liquid-control" onClick={updater.check} title="检查更新"><GlassSurface control />{updater.version ? `v${updater.version}` : '更新'}</button>}
         </div>
       </div>
@@ -1965,13 +1984,15 @@ export default function App() {
   const [journal, setJournal] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(false);
   const [bridgeProvider, setBridgeProvider] = useState(() => initialActiveLibrary?.startsWith('netease:') ? 'netease' : 'qq');
+  const [browseAccountPlaylists, setBrowseAccountPlaylists] = useState(false);
   const [displayAccount, setDisplayAccount] = useState(readDisplayMusicAccount);
   const chooseDisplayAccount = provider => {
     setDisplayAccount(provider);
     saveDisplayMusicAccount(provider);
   };
-  const openBridge = useCallback(provider => {
+  const openBridge = useCallback((provider, browsePlaylists = false) => {
     if (provider) setBridgeProvider(provider);
+    setBrowseAccountPlaylists(browsePlaylists);
     setBridgeOpen(true);
   }, []);
   const closeBridge = useCallback(() => setBridgeOpen(false), []);
@@ -2609,6 +2630,18 @@ export default function App() {
   const accounts = { qq: qqAccount, netease: neteaseAccount };
   const accountProvider = accounts[displayAccount].profile ? displayAccount
     : qqAccount.profile ? 'qq' : neteaseAccount.profile ? 'netease' : bridgeProvider;
+  const otherProvider = accountProvider === 'qq' ? 'netease' : 'qq';
+  const nextAccount = accounts[otherProvider].profile ? otherProvider : null;
+  const switchAccount = () => {
+    if (!nextAccount) return;
+    const isQQ = nextAccount === 'qq';
+    const id = isQQ ? getActivePlaylistId() : getActiveNeteasePlaylistId();
+    const targetPlaylist = importedPlaylistKey(nextAccount, id);
+    chooseDisplayAccount(nextAccount);
+    if (!targetPlaylist) openBridge(nextAccount, true);
+    else if (targetPlaylist === activeLibrary) setJournal(false);
+    else handleSwitchPlaylist(targetPlaylist);
+  };
   return (
     <>
       <SvgDefs />
@@ -2628,6 +2661,8 @@ export default function App() {
         bridgeOpen={bridgeOpen}
         profile={accounts[accountProvider].profile}
         accountProvider={accountProvider}
+        nextAccount={nextAccount}
+        onSwitchAccount={switchAccount}
         playlists={combinedPlaylists}
         activePlaylist={activeLibrary}
         onSwitchPlaylist={handleSwitchPlaylist}
@@ -2734,8 +2769,7 @@ export default function App() {
         open={bridgeOpen}
         provider={bridgeProvider}
         onProviderChange={setBridgeProvider}
-        displayAccount={displayAccount}
-        onDisplayAccountChange={chooseDisplayAccount}
+        browseAccountPlaylists={browseAccountPlaylists}
         onClose={closeBridge}
         qq={{
           account: qqAccount, onImport: handleQQImport, onClear: handleQQClear, importedCount: qqCount, playlists: qqPlaylists,

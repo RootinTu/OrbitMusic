@@ -9,7 +9,7 @@ const platforms = [
   { id: 'netease', name: '网易云音乐' },
 ];
 
-export default function MusicBridge({ open, provider, onProviderChange, displayAccount, onDisplayAccountChange, onClose, qq, netease }) {
+export default function MusicBridge({ open, provider, onProviderChange, browseAccountPlaylists, onClose, qq, netease }) {
   const dialogRef = useRef(null);
   const tabsRef = useRef(null);
 
@@ -75,23 +75,13 @@ export default function MusicBridge({ open, provider, onProviderChange, displayA
           </div>
           <BridgeGlassButton className="bridge-close" onClick={onClose} aria-label="关闭音乐桥">×</BridgeGlassButton>
         </div>
-        {open && qq.account.profile && netease.account.profile && (
-          <div className="bridge-display-account" role="group" aria-label="顶部显示账号">
-            <span>顶部显示</span>
-            {platforms.map(({ id, name }) => (
-              <BridgeGlassButton key={id} aria-pressed={displayAccount === id} onClick={() => onDisplayAccountChange(id)}>
-                {name}
-              </BridgeGlassButton>
-            ))}
-          </div>
-        )}
         <div className="bridge-provider-panel" id="bridge-panel-qq" role="tabpanel"
           aria-labelledby="bridge-tab-qq" hidden={provider !== 'qq'}>
-          <QQBridge {...qq} open={open && provider === 'qq'} />
+          <QQBridge {...qq} open={open && provider === 'qq'} browseAccountPlaylists={browseAccountPlaylists} />
         </div>
         <div className="bridge-provider-panel netease-bridge" id="bridge-panel-netease" role="tabpanel"
           aria-labelledby="bridge-tab-netease" hidden={provider !== 'netease'}>
-          <NeteaseBridge {...netease} open={open && provider === 'netease'} onClose={onClose} />
+          <NeteaseBridge {...netease} open={open && provider === 'netease'} browseAccountPlaylists={browseAccountPlaylists} onClose={onClose} />
         </div>
       </section>
     </div>

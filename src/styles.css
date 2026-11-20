@@ -380,16 +380,25 @@ html[data-glass-renderer="full-dom"] button.liquid-control:hover{background:#fff
   background: #ffffff20 !important;
   color: #fff;
 }
-.bridge-display-account {
+.bridge-account-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 30px 14px;
-  color: #bcc1cb;
-  font-size: 11px;
+  gap: 6px;
 }
-.bridge-display-account button { min-height: 30px; padding: 0 12px; font-size: 11px; }
-.qq-bridge .bridge-display-account button[aria-pressed="true"] { background: #ffffff20 !important; color: #fff; }
+.bridge-account-manage {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+.bridge-account-controls .bridge-account-switch-icon,
+.bridge-account-manage svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  opacity: .75;
+}
 .bridge-launch-label {
   max-width: 112px;
   overflow: hidden;
@@ -454,13 +463,13 @@ html[data-glass-renderer="full-dom"] button.liquid-control:hover{background:#fff
   }
   .header-right .edition .version-chip { display: none; }
   .header-right .bridge-launch { min-height: 30px; padding: 0 11px; }
+  .bridge-account-manage { width: 30px; height: 30px; }
   .bridge-launch-label { max-width: 84px; }
   .qq-bridge .bridge-head { gap: 8px; padding-inline: 14px; }
   .bridge-head h2 { font-size: 18px; white-space: nowrap; }
   .bridge-head .bridge-close { width: 32px; height: 32px; }
   .bridge-provider-tabs { gap: 4px; }
   .bridge-provider-tabs button { min-height: 32px; padding: 0 8px; font-size: 11px; }
-  .bridge-display-account { margin-inline: 19px; }
   .bridge-provider-panel { overflow-y: auto; }
   .bridge-provider-panel .bridge-grid { flex: none; grid-template-rows: 220px 270px; }
   .bridge-provider-panel .bridge-library { display: flex; }

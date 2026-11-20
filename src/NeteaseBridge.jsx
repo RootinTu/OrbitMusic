@@ -16,7 +16,7 @@ function Art({ src, title }) {
   return src ? <img src={src} alt={`${title} 封面`} draggable="false" /> : <span className="bridge-art-fallback">♫</span>;
 }
 
-export default function NeteaseBridge({ open, account, onClose, onImport, onClear, importedCount }) {
+export default function NeteaseBridge({ open, account, browseAccountPlaylists, onClose, onImport, onClear, importedCount }) {
   const { profile, refresh, update } = account;
   const [playlists, setPlaylists] = useState([]);
   const [query, setQuery] = useState('');
@@ -40,10 +40,14 @@ export default function NeteaseBridge({ open, account, onClose, onImport, onClea
   useEffect(() => {
     if (!open) return;
     setError('');
+    if (browseAccountPlaylists) {
+      setPreview(null);
+      setSelected(new Set());
+    }
     const controller = new AbortController();
     refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
     return () => controller.abort();
-  }, [open, refresh]);
+  }, [browseAccountPlaylists, open, refresh]);
 
   const login = async () => {
     if (!desktop) return setError('扫码登录仅在 ORBIT 桌面应用中开放。');
