@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { registerQQMusicViteMiddlewares } from './server/qq-music.mjs';
 import express from 'express';
 import { registerNeteaseMusicExpressRoutes } from './server/netease-music.mjs';
+import { registerKugouMusicExpressRoutes } from './server/kugou-music.mjs';
 
 const buildVersion = Date.now().toString(36);
 
@@ -12,16 +13,17 @@ function writeJson(response, status, payload) {
   response.end(JSON.stringify(payload));
 }
 
-function qqMusicBridge() {
+function musicBridge() {
   return {
-    name: 'orbit-qq-music-bridge',
+    name: 'orbit-music-bridge',
     configureServer(server) {
       registerQQMusicViteMiddlewares(server, writeJson);
-      const netease = express();
-      netease.use(express.json({ limit: '256kb' }));
-      registerNeteaseMusicExpressRoutes(netease);
+      const bridge = express();
+      bridge.use(express.json({ limit: '256kb' }));
+      registerNeteaseMusicExpressRoutes(bridge);
+      registerKugouMusicExpressRoutes(bridge);
       server.middlewares.use((request, response, next) => {
-        if (request.url?.startsWith('/api/netease/')) return netease(request, response, next);
+        if (/^\/api\/(netease|kugou)\//.test(request.url || '')) return bridge(request, response, next);
         next();
       });
     },
@@ -31,7 +33,7 @@ function qqMusicBridge() {
 export default defineConfig({
   // 打包后可以放在任意子目录或 Android WebView 的本地目录中。
   base: './',
-  plugins: [react(), qqMusicBridge()],
+  plugins: [react(), musicBridge()],
   // public 目录里的音乐不会被 Vite 改成哈希文件名；给每次构建注入版本号，
   // 由 tracks.js 拼到音频、封面和歌词 URL 上，绕过 ColorOS 的强缓存。
   define: {

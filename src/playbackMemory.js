@@ -23,6 +23,7 @@ export function playbackTrackKey(track) {
   if (!track) return '';
   if (track.provider === 'qq') return track.mid ? `qq:${track.mid}` : '';
   if (track.provider === 'netease') return track.cloudId ? `netease:${track.cloudId}` : '';
+  if (track.provider === 'kugou') return track.hash ? `kugou:${track.hash}` : '';
   return track.src ? `local:${track.src.split(/[?#]/, 1)[0]}` : '';
 }
 

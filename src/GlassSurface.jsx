@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
 import { registerGlassSurface, resolveGlassVariant } from './glassScene.js';
 
 // The optical layer is rendered once, together with the complete live backdrop.
@@ -6,7 +6,7 @@ export default memo(function GlassSurface({ subtle = false, control = false, var
   const host = useRef(null);
   const [ready, setReady] = useState(false);
   const resolvedVariant = resolveGlassVariant({ variant, subtle, control });
-  useEffect(() => registerGlassSurface(host.current, {
+  useLayoutEffect(() => registerGlassSurface(host.current, {
     subtle: resolvedVariant === 'subtle',
     control: resolvedVariant === 'control',
     variant: resolvedVariant,

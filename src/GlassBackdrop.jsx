@@ -22,7 +22,7 @@ export default function GlassBackdrop({ children, soundfield }) {
         root.dataset.glassRenderer = 'css-fallback';
         return;
       }
-      let device, core, source, canvas, frame, unsubscribe, presentation;
+      let device, core, source, canvas, frame, unsubscribe, presentation, detachVisibility;
       let lastBackdropCanvas, backdropOpacity = 0;
       const layouts = [];
       const pendingSurfaces = [];
@@ -31,6 +31,7 @@ export default function GlassBackdrop({ children, soundfield }) {
       const cleanup = () => {
         cancelAnimationFrame(frame);
         unsubscribe?.();
+        detachVisibility?.();
         // Restore React's source node before the content source removes its hosts.
         if (content.parentNode !== mount) mount.append(content);
         content.classList.remove('is-canvas-content');
@@ -177,7 +178,20 @@ export default function GlassBackdrop({ children, soundfield }) {
         syncSurfaces();
         device.addEventListener('uncapturederror', event => fail(event.error));
         device.lost.then(info => fail(info.message));
-        const started = performance.now();
+        let firstVisibleFrame;
+        const requestVisiblePaint = () => {
+          if (document.hidden) return;
+          firstVisibleFrame = undefined;
+          canvas.requestPaint();
+        };
+        document.addEventListener('visibilitychange', requestVisiblePaint);
+        const stopDesktopListener = window.orbitDesktop?.onVisualActivity?.(visible => {
+          if (visible) requestVisiblePaint();
+        });
+        detachVisibility = () => {
+          document.removeEventListener('visibilitychange', requestVisiblePaint);
+          stopDesktopListener?.();
+        };
         const tick = time => {
           if (failed || disposed || token !== generation) return;
           frame = requestAnimationFrame(tick);
@@ -185,6 +199,7 @@ export default function GlassBackdrop({ children, soundfield }) {
           // Otherwise old covers/text can remain on screen behind a long GPU queue.
           if (document.hidden || inFlight) return;
           inFlight = true;
+          firstVisibleFrame ??= time;
           try {
             const nextDpr = Math.min(devicePixelRatio || 1, 1.5);
             const w = Math.max(1, Math.round(innerWidth * nextDpr));
@@ -219,13 +234,14 @@ export default function GlassBackdrop({ children, soundfield }) {
                 }
               }
             }
-            // Request a fresh snapshot of the cards and lyrics. The independent
-            // soundfield is sampled separately for the glass panes.
-            canvas.requestPaint();
+            // Sync attaches the live DOM host. A paint requested before that
+            // point can miss the first snapshot while the window is opening.
             const layers = source.sync();
+            canvas.requestPaint();
             const snapshot = source.getSceneHtmlEntry(background);
+            const hasSnapshot = snapshot?.copiedDeviceWidth > 0 && snapshot.copiedDeviceHeight > 0;
             const frameOptions = { layers, width, height, dpr, contentSource: source };
-            if (presentation && snapshot?.copiedDeviceWidth > 0) {
+            if (presentation && hasSnapshot) {
               const terrain = soundfield.glCanvasRef.current;
               const backdrop = terrain?.style.display === 'block' ? terrain : soundfield.canvasRef.current;
               if (backdrop !== lastBackdropCanvas) {
@@ -239,13 +255,13 @@ export default function GlassBackdrop({ children, soundfield }) {
             }
             device.queue.onSubmittedWorkDone().then(() => {
               if (failed || disposed || token !== generation) return;
-              if (snapshot?.copiedDeviceWidth > 0) {
+              if (hasSnapshot) {
                 if (!active) { active = true; root.dataset.glassRenderer = 'full-dom'; }
                 for (const entry of pendingSurfaces) setGlassSurfaceReady(entry, true);
               }
               inFlight = false;
             }, fail);
-            if (!active && time - started > 4000) {
+            if (!active && !hasSnapshot && time - firstVisibleFrame > 4000) {
               throw new Error('HTML-in-Canvas did not produce a complete backdrop texture');
             }
           } catch (error) { fail(error); }

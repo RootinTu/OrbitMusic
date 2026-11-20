@@ -3,13 +3,15 @@ import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton } from './BridgeGlassControls.jsx';
 import QQBridge from './QQBridge.jsx';
 import NeteaseBridge from './NeteaseBridge.jsx';
+import KugouBridge from './KugouBridge.jsx';
 
 const platforms = [
   { id: 'qq', name: 'QQ 音乐' },
   { id: 'netease', name: '网易云音乐' },
+  { id: 'kugou', name: '酷狗音乐' },
 ];
 
-export default function MusicBridge({ open, provider, onProviderChange, browseAccountPlaylists, onClose, qq, netease }) {
+export default function MusicBridge({ open, provider, onProviderChange, browseAccountPlaylists, onClose, qq, netease, kugou }) {
   const dialogRef = useRef(null);
   const tabsRef = useRef(null);
 
@@ -63,7 +65,7 @@ export default function MusicBridge({ open, provider, onProviderChange, browseAc
         role="dialog" aria-modal="true" aria-labelledby="music-bridge-title" onKeyDown={onDialogKeyDown}>
         {open && <GlassSurface variant="dialog" />}
         <div className="bridge-head">
-          <h2 id="music-bridge-title">{(provider === 'qq' ? qq : netease).account.profile ? '音乐账号' : '登录'}</h2>
+          <h2 id="music-bridge-title">{provider === 'kugou' || (provider === 'qq' ? qq : netease).account.profile ? '音乐账号' : '登录'}</h2>
           <div className="bridge-provider-tabs" role="tablist" aria-label="音乐平台" ref={tabsRef} onKeyDown={onTabKeyDown}>
             {platforms.map(({ id, name }) => (
               <BridgeGlassButton key={id} id={`bridge-tab-${id}`} role="tab"
@@ -82,6 +84,10 @@ export default function MusicBridge({ open, provider, onProviderChange, browseAc
         <div className="bridge-provider-panel netease-bridge" id="bridge-panel-netease" role="tabpanel"
           aria-labelledby="bridge-tab-netease" hidden={provider !== 'netease'}>
           <NeteaseBridge {...netease} open={open && provider === 'netease'} browseAccountPlaylists={browseAccountPlaylists} onClose={onClose} />
+        </div>
+        <div className="bridge-provider-panel kugou-bridge" id="bridge-panel-kugou" role="tabpanel"
+          aria-labelledby="bridge-tab-kugou" hidden={provider !== 'kugou'}>
+          <KugouBridge {...kugou} open={open && provider === 'kugou'} />
         </div>
       </section>
     </div>

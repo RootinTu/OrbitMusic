@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkForVerifiedUpdate, createVersionedTaskQueue, downloadVerifiedUpdate } from './update-download.mjs';
+import { KUGOU_HOME, kugouSongPage, listKugouAccountPlaylists, listKugouAccountSongs } from './kugou-session.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(__dirname, '..');
@@ -14,7 +15,11 @@ const QQ_LOGIN_PARTITION = 'persist:orbit-music-qq-login';
 const QQ_LOGIN_URL = 'https://y.qq.com/n/ryqq/profile';
 const NETEASE_LOGIN_PARTITION = 'persist:orbit-music-netease-login';
 const NETEASE_LOGIN_URL = 'https://music.163.com/#/login';
+const KUGOU_LOGIN_PARTITION = 'persist:orbit-music-kugou-login';
 let mainWindow = null;
+let kugouLoginWindow = null;
+let kugouPlayerWindow = null;
+let kugouPlayerRequest = 0;
 let qqCookieSyncTimer = null;
 let neteaseCookieSyncTimer = null;
 let displaySleepBlockerId = null;
@@ -189,6 +194,76 @@ function createLoginWindow(owner, { partition = QQ_LOGIN_PARTITION, title = 'QQ 
       sandbox: true,
     },
   });
+}
+
+function kugouWindow(owner, title, login) {
+  const win = createLoginWindow(owner, { partition: KUGOU_LOGIN_PARTITION, title });
+  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  function permitted(url) {
+    try {
+      const { protocol, hostname, username, password } = new URL(url);
+      return protocol === 'https:' && !username && !password &&
+        (/(?:^|\.)kugou\.com$/.test(hostname) || (login && /(?:^|\.)qq\.com$/.test(hostname)));
+    } catch { return false; }
+  }
+  win.webContents.on('will-navigate', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+  win.webContents.on('will-redirect', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    return login && permitted(url) ? {
+      action: 'allow',
+      overrideBrowserWindowOptions: { webPreferences: {
+        partition: KUGOU_LOGIN_PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true,
+      } },
+    } : { action: 'deny' };
+  });
+  win.webContents.on('did-create-window', child => {
+    child.webContents.on('will-navigate', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+    child.webContents.on('will-redirect', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.once('closed', () => { if (!child.isDestroyed()) child.close(); });
+  });
+  win.once('ready-to-show', () => { if (!win.isDestroyed()) win.show(); });
+  return win;
+}
+
+async function showKugouLogin(owner) {
+  if (kugouLoginWindow && !kugouLoginWindow.isDestroyed()) {
+    kugouLoginWindow.show();
+    return { ok: true };
+  }
+  const win = kugouLoginWindow = kugouWindow(owner, '酷狗官网登录 · ORBIT Bridge', true);
+  win.once('closed', () => { if (kugouLoginWindow === win) kugouLoginWindow = null; });
+  try {
+    await win.loadURL(KUGOU_HOME);
+    if (!win.isDestroyed()) win.show();
+    return { ok: true };
+  } catch {
+    if (!win.isDestroyed()) win.destroy();
+    return { ok: false, message: '无法打开酷狗官网登录页' };
+  }
+}
+
+async function showKugouPlayer(owner, hash, albumId, pageId) {
+  const link = kugouSongPage(hash, albumId, pageId);
+  if (!link) return { ok: false, message: '无效的酷狗歌曲编号' };
+  const request = ++kugouPlayerRequest;
+  const account = await listKugouAccountPlaylists(session.fromPartition(KUGOU_LOGIN_PARTITION));
+  if (request !== kugouPlayerRequest) return { ok: false, reason: 'superseded' };
+  if (!account.ok) return account;
+  if (!kugouPlayerWindow || kugouPlayerWindow.isDestroyed()) {
+    const win = kugouPlayerWindow = kugouWindow(owner, '酷狗官方播放器', false);
+    win.once('closed', () => { if (kugouPlayerWindow === win) kugouPlayerWindow = null; });
+  }
+  const win = kugouPlayerWindow;
+  if (win.webContents.getURL() !== link) await win.loadURL(link);
+  if (request === kugouPlayerRequest && !win.isDestroyed()) win.show();
+  return { ok: true };
+}
+
+function stopKugouPlayer() {
+  kugouPlayerRequest++;
+  kugouPlayerWindow?.destroy();
+  return { ok: true };
 }
 
 async function openQQMusicLoginWindow(owner) {
@@ -392,6 +467,16 @@ async function createWindow() {
       relaunchDisplayName: 'ORBIT Music',
     });
   }
+  // Song source links open outside the app, without its desktop preload.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const address = new URL(url);
+      if (['http:', 'https:'].includes(address.protocol) && !address.username && !address.password) {
+        shell.openExternal(address.href).catch(() => {});
+      }
+    } catch { /* not an external web URL */ }
+    return { action: 'deny' };
+  });
   mainWindow.on('ready-to-show', () => mainWindow?.show());
   mainWindow.on('minimize', () => emitVisualActivity(false));
   mainWindow.on('hide', () => emitVisualActivity(false));
@@ -408,6 +493,25 @@ ipcMain.handle('orbit-open-qq-login', (event) => openQQMusicLoginWindow(BrowserW
 ipcMain.handle('orbit-refresh-qq-login', () => syncCurrentQQPlaybackCookie());
 ipcMain.handle('orbit-open-netease-login', event => openNeteaseLoginWindow(BrowserWindow.fromWebContents(event.sender)));
 ipcMain.handle('orbit-refresh-netease-login', () => syncCurrentNeteaseCookie());
+function handleKugou(channel, fn) {
+  ipcMain.handle(`orbit-kugou-${channel}`, async (event, ...args) => {
+    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame ||
+        new URL(event.senderFrame.url).origin !== new URL(appUrl).origin) return { ok: false };
+    try { return await fn(event, ...args); }
+    catch { return { ok: false, message: '酷狗请求未完成，请检查网络或在官网确认登录状态。' }; }
+  });
+}
+handleKugou('login', event => showKugouLogin(BrowserWindow.fromWebContents(event.sender)));
+handleKugou('playlists', () => listKugouAccountPlaylists(session.fromPartition(KUGOU_LOGIN_PARTITION)));
+handleKugou('songs', (_event, id) => listKugouAccountSongs(session.fromPartition(KUGOU_LOGIN_PARTITION), id));
+handleKugou('play', (event, hash, albumId, pageId) => showKugouPlayer(BrowserWindow.fromWebContents(event.sender), hash, albumId, pageId));
+handleKugou('stop', stopKugouPlayer);
+handleKugou('logout', async () => {
+  kugouLoginWindow?.destroy();
+  stopKugouPlayer();
+  await session.fromPartition(KUGOU_LOGIN_PARTITION).clearStorageData();
+  return { ok: true };
+});
 ipcMain.handle('orbit-set-keep-awake', (_event, enabled) => {
   if (enabled) {
     if (displaySleepBlockerId === null || !powerSaveBlocker.isStarted(displaySleepBlockerId)) {

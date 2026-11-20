@@ -16,6 +16,9 @@ import {
   clearNeteaseTracks, getActiveNeteasePlaylistId, importNeteaseTracks,
   listNeteasePlaylists, switchNeteasePlaylist,
 } from './neteaseLibrary.js';
+import {
+  clearKugouTracks, getActiveKugouPlaylistId, importKugouTracks, listKugouPlaylists, switchKugouPlaylist,
+} from './kugouLibrary.js';
 import { BeatEngine } from './beatEngine.js';
 import { OUTPUT_MODES, applySink, listOutputs, readBeatOffset, readOutputPref, requestDeviceLabels, saveBeatOffset, saveOutputPref } from './audioOut.js';
 import { clearProviderPlayback, forgetPlaylistPlayback, playbackTrackKey, readLastTrack, resumeAt, saveLastTrack, saveProgress } from './playbackMemory.js';
@@ -27,34 +30,46 @@ const IS_DESKTOP_APP = Boolean(window.orbitDesktop?.isDesktop)
 if (IS_DESKTOP_APP) tracks.splice(0, tracks.length);
 const ACTIVE_LIBRARY_KEY = 'orbit.activePlaylist.v1';
 const importedPlaylistKey = (provider, id) => (id ? `${provider}:${id}` : null);
+const importedLibraries = new Map([
+  ['qq', { list: listQQPlaylists, active: getActivePlaylistId, select: switchQQPlaylist }],
+  ['netease', { list: listNeteasePlaylists, active: getActiveNeteasePlaylistId, select: switchNeteasePlaylist }],
+  ['kugou', { list: listKugouPlaylists, active: getActiveKugouPlaylistId, select: switchKugouPlaylist }],
+]);
 const removeImportedTracks = library => {
   for (let index = library.length - 1; index >= 0; index -= 1) {
-    if (library[index]?.provider === 'qq' || library[index]?.provider === 'netease') library.splice(index, 1);
+    if (importedLibraries.has(library[index]?.provider)) library.splice(index, 1);
   }
   library.forEach((track, index) => { track.id = index; });
 };
 
-// QQ 与网易云只能有一个歌单处于播放状态。旧版分别 hydrate 两个来源，正是
-// 造成 30 + 30 叠成 60 张卡片的根因。这里先迁移存储，再只装载一个活动歌单。
-const initialQQPlaylists = listQQPlaylists();
-const initialNeteasePlaylists = listNeteasePlaylists();
+// Only one imported playlist is shown, regardless of its music provider.
+function fallbackPlaylistKey(excluded) {
+  for (const [provider, library] of importedLibraries) {
+    if (provider === excluded) continue;
+    const id = library.active() || library.list()[0]?.id;
+    if (id) return importedPlaylistKey(provider, id);
+  }
+  return null;
+}
+
+function parsePlaylistKey(key) {
+  const [provider, ...parts] = String(key || '').split(':');
+  return { provider, id: parts.join(':'), library: importedLibraries.get(provider) };
+}
+
+function switchImportedTracks(key) {
+  const { id, library } = parsePlaylistKey(key);
+  removeImportedTracks(tracks);
+  return library?.select(tracks, id);
+}
+
 let initialActiveLibrary = null;
 try { initialActiveLibrary = localStorage.getItem(ACTIVE_LIBRARY_KEY); } catch { /* ignore */ }
-const [initialProvider, ...initialIdParts] = String(initialActiveLibrary || '').split(':');
-const initialRawId = initialIdParts.join(':');
-const validInitial = initialProvider === 'qq'
-  ? initialQQPlaylists.some(item => item.id === initialRawId)
-  : initialProvider === 'netease' && initialNeteasePlaylists.some(item => item.id === initialRawId);
-if (!validInitial) {
-  const qqId = getActivePlaylistId() || initialQQPlaylists[0]?.id;
-  const neteaseId = getActiveNeteasePlaylistId() || initialNeteasePlaylists[0]?.id;
-  initialActiveLibrary = qqId ? importedPlaylistKey('qq', qqId) : importedPlaylistKey('netease', neteaseId);
+const storedPlaylist = parsePlaylistKey(initialActiveLibrary);
+if (!storedPlaylist.library?.list().some(item => item.id === storedPlaylist.id)) {
+  initialActiveLibrary = fallbackPlaylistKey();
 }
-if (initialActiveLibrary?.startsWith('netease:')) {
-  switchNeteasePlaylist(tracks, initialActiveLibrary.slice('netease:'.length));
-} else if (initialActiveLibrary?.startsWith('qq:')) {
-  switchQQPlaylist(tracks, initialActiveLibrary.slice('qq:'.length));
-}
+if (initialActiveLibrary) switchImportedTracks(initialActiveLibrary);
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 // 模式 4 是 GPU 地形：走独立的 WebGL 画布，前面四种仍是原来的 Canvas 2D 画法
@@ -402,7 +417,7 @@ function Header({
   onSwitchAccount, playlists, activePlaylist, onSwitchPlaylist, updater,
 }) {
   const accountName = profile ? musicAccountName(profile, accountProvider) : '';
-  const manageLabel = profile ? '管理音乐账号' : '登录';
+  const manageLabel = profile ? '管理音乐账号' : '打开音乐桥';
   const switchLabel = nextAccount ? `切换到${nextAccount === 'qq' ? ' QQ 音乐' : '网易云音乐'}歌单` : '';
   const dialogProps = { 'aria-haspopup': 'dialog', 'aria-expanded': bridgeOpen, 'aria-controls': 'music-bridge' };
   return (
@@ -427,7 +442,7 @@ function Header({
               aria-label={accountName ? `${accountName} · ${switchLabel || manageLabel}` : manageLabel}>
               <GlassSurface control />
               {profile && <MusicAccountAvatar profile={profile} />}
-              <span className="bridge-launch-label">{accountName || '登录'}</span>
+              <span className="bridge-launch-label">{accountName || '音乐桥'}</span>
               {nextAccount && <Icon name="account-switch" className="bridge-account-switch-icon" />}
             </button>
             {nextAccount && (
@@ -546,7 +561,7 @@ function LyricsPanel({ track, trackNumber, currentTime, duration, playing, audio
   }, [activeIndex, visibleRows, mobile]);
 
   const providerName = track.provider === 'qq' ? 'QQ 音乐'
-    : track.provider === 'netease' ? '网易云音乐' : '本地 LRC';
+    : track.provider === 'netease' ? '网易云音乐' : track.provider === 'kugou' ? '酷狗音乐' : '本地 LRC';
   const wordSynced = rows.some(row => row.wordLines.some(Boolean));
   const source = state === 'ready' ? `${providerName} · ${wordSynced ? '逐字歌词' : '逐行歌词'}`
     : state === 'loading' ? '正在载入同步歌词' : state === 'missing' ? '暂无同步歌词' : '同步歌词读取失败';
@@ -614,7 +629,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
   const { canvasRef, glCanvasRef } = soundfield;
   const glTerrainRef = useRef(null);
   const cardRefs = useRef([]);
-  const suppressClickUntil = useRef(0);
+  const ignoreDragClick = useRef(false);
   const propsRef = useRef({ current, playing, zoom, backdropMode });
   const coordinates = useMemo(makeCardCoordinates, [libraryVersion]);
 
@@ -1544,8 +1559,10 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         setStyle('visibility', (!active && !isPlaying && fade <= 0.002) ? 'hidden' : 'visible');
         const brightFloor = gpuBackdrop ? (mobile ? 0.55 : 0.62) : (mobile ? 0.4 : 0.45);
         setStyle('filter', dragging ? '' : `brightness(${(brightFloor + (depth + 1) * (mobile ? 0.25 : 0.3)).toFixed(2)})`);
-        setStyle('zIndex', String(active ? 90 : Math.round((depth + 1) * 30) + 1));
-        const interactive = isPlaying ? active : depth >= -0.3;
+        // Browse in depth order rather than letting a playing card on the
+        // back of the sphere cover a new track that has rotated in front.
+        setStyle('zIndex', String(active && !revealingCards ? 90 : Math.round((depth + 1) * 30) + 1));
+        const interactive = (active && !revealingCards) || depth >= -0.3;
         setStyle('pointerEvents', interactive ? 'auto' : 'none');
         const tabIndex = interactive ? 0 : -1;
         if (cache.tabIndex !== tabIndex) {
@@ -1615,6 +1632,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
 
     const startDrag = event => {
       if (event.button !== 0 || event.target.closest('.view-controls')) return;
+      ignoreDragClick.current = false;
       dragging = true;
       pointerId = event.pointerId;
       lastX = event.clientX;
@@ -1652,7 +1670,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
     const endDrag = event => {
       if (!dragging || event.pointerId !== pointerId) return;
       dragging = false;
-      if (moved > 7) suppressClickUntil.current = performance.now() + 280;
+      ignoreDragClick.current = moved > 7 || event.type === 'pointercancel';
       if (reducedMotion.matches) {
         velocityX = 0;
         velocityY = 0;
@@ -1727,7 +1745,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
         <div className="empty-universe">
           <span className="eyebrow">ORBIT DESKTOP / EMPTY LIBRARY</span>
           <h1>你的音乐宇宙，<br />从第一首导入开始。</h1>
-          <p>从 QQ 音乐或网易云音乐搜索歌曲、导入歌单。</p>
+          <p>从 QQ 音乐、网易云音乐或酷狗音乐搜索歌曲、导入歌单。</p>
           <button className="empty-import" onClick={onOpenBridge}>登录或导入歌曲 <span>↗</span></button>
         </div>
       )}
@@ -1741,11 +1759,11 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
             key={track.id}
             ref={element => { cardRefs.current[index] = element; }}
             onClick={event => {
-              if (performance.now() < suppressClickUntil.current) {
+              if (event.detail > 0 && ignoreDragClick.current) {
                 event.preventDefault();
                 return;
               }
-              onSelect(track.id, true);
+              if (!playing || track.id !== current) onSelect(track.id, true);
             }}
           >
             <LiquidArt src={track.cover} className="card-art" />
@@ -1804,6 +1822,27 @@ function Player({ track, current, playing, preparing, currentTime, duration, ran
       </button>
     );
   }
+  if (track.provider === 'kugou') return (
+    <footer className="player glass refractive-player">
+      <GlassSurface variant="player" />
+      <div className="now">
+        <LiquidArt src={track.cover} className="now-art" />
+        <div className="now-copy">
+          <div className="now-title">{track.title}</div>
+          <div className="now-sub">{track.artist} · 酷狗官方播放</div>
+        </div>
+      </div>
+      <div className="transport">
+        <button className="icon" onClick={() => onStep(-1)} aria-label="上一首"><Icon name="next" className="flip" /></button>
+        <button className="icon" onClick={onPlay} disabled={preparing} aria-label="在酷狗播放" title="在酷狗播放"><Icon name="play" /></button>
+        <button className="icon" onClick={() => onStep(1)} aria-label="下一首"><Icon name="next" /></button>
+      </div>
+      <div className="player-right">
+        <span>音量与进度请在酷狗窗口调整</span>
+        <button className="icon collapse-btn" onClick={() => onHiddenChange(true)} aria-label="收起播放栏"><Icon name="chevron" /></button>
+      </div>
+    </footer>
+  );
   return (
     <footer className="player glass refractive-player">
       <GlassSurface variant="player" />
@@ -1963,7 +2002,7 @@ function DetailDialog({ track, onClose, onPlay }) {
         <span className="eyebrow">TRACK {String(track.id + 1).padStart(2, '0')} / {track.genre}</span>
         <h2>{track.title}</h2><p>{track.note}</p>
         <div className="detail-meta"><span>{track.artist}</span><span>·</span><a href={track.sourceUrl} target="_blank" rel="noreferrer">查看歌曲来源 ↗</a></div>
-        <button className="listen" onClick={() => onPlay(track.id)}>播放完整歌曲 <Icon name="play" /></button>
+        <button className="listen" onClick={() => onPlay(track.id)}>{track.provider === 'kugou' ? '在酷狗播放' : '播放歌曲'} <Icon name="play" /></button>
         <small>音源、歌词与封面来自本地 assets 目录</small>
       </div>
     </dialog>
@@ -1983,7 +2022,7 @@ export default function App() {
   });
   const [journal, setJournal] = useState(false);
   const [bridgeOpen, setBridgeOpen] = useState(false);
-  const [bridgeProvider, setBridgeProvider] = useState(() => initialActiveLibrary?.startsWith('netease:') ? 'netease' : 'qq');
+  const [bridgeProvider, setBridgeProvider] = useState(() => parsePlaylistKey(initialActiveLibrary).provider || 'qq');
   const [browseAccountPlaylists, setBrowseAccountPlaylists] = useState(false);
   const [displayAccount, setDisplayAccount] = useState(readDisplayMusicAccount);
   const chooseDisplayAccount = provider => {
@@ -2006,11 +2045,13 @@ export default function App() {
   const [qqPlaylists, setQQPlaylists] = useState(listQQPlaylists);
   const [activePlaylist, setActivePlaylist] = useState(getActivePlaylistId);
   const [neteasePlaylists, setNeteasePlaylists] = useState(listNeteasePlaylists);
+  const [kugouPlaylists, setKugouPlaylists] = useState(listKugouPlaylists);
   const [activeLibrary, setActiveLibrary] = useState(initialActiveLibrary);
   const combinedPlaylists = useMemo(() => [
     ...qqPlaylists.map(item => ({ ...item, id: importedPlaylistKey('qq', item.id), rawId: item.id, provider: 'qq' })),
     ...neteasePlaylists.map(item => ({ ...item, id: importedPlaylistKey('netease', item.id), rawId: item.id, provider: 'netease' })),
-  ], [neteasePlaylists, qqPlaylists]);
+    ...kugouPlaylists.map(item => ({ ...item, id: importedPlaylistKey('kugou', item.id), rawId: item.id, provider: 'kugou' })),
+  ], [kugouPlaylists, neteasePlaylists, qqPlaylists]);
   // 曲库版本号：只要重建过 tracks 就自增。不能用 tracks.length——
   // 两个歌单都是 30 首时长度不变，依赖它的 useMemo 不会重算，卡片就不跟着切。
   const [libraryVersion, setLibraryVersion] = useState(0);
@@ -2080,7 +2121,7 @@ export default function App() {
     persistPlayback(audio, true);
     setCurrentTime(0);
     setDuration(track?.duration || 0);
-    if (!track) {
+    if (!track?.src) {
       mediaRef.current = null;
       audio.removeAttribute('src');
     } else {
@@ -2369,10 +2410,31 @@ export default function App() {
   const startPlayback = useCallback(async () => {
     const currentTrack = tracks[currentRef.current];
     const media = mediaRef.current;
-    if (preparingRef.current || !currentTrack || !media) {
+    if (preparingRef.current || !currentTrack) {
       if (!currentTrack) openBridge();
       return;
     }
+    if (currentTrack.provider === 'kugou') {
+      if (!window.orbitDesktop?.openKugouPlayer) return showToast('请在 ORBIT 桌面版登录酷狗并播放');
+      const request = {};
+      preparingRef.current = request;
+      setPreparing(true);
+      try {
+        const result = await window.orbitDesktop.openKugouPlayer(currentTrack.hash, currentTrack.albumId, currentTrack.pageId);
+        if (preparingRef.current !== request) return;
+        if (result?.reason === 'login') {
+          showToast('请先登录酷狗账号');
+          openBridge('kugou');
+        } else if (!result?.ok) showToast(result?.message || '无法打开酷狗官方播放器');
+      } catch {
+        if (preparingRef.current === request) showToast('无法打开酷狗官方播放器');
+      } finally {
+        if (preparingRef.current === request) cancelPlaybackPreparation();
+      }
+      return;
+    }
+    if (!media) return;
+    window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     const request = {};
     const isCurrent = () => preparingRef.current === request && mediaRef.current === media;
     preparingRef.current = request;
@@ -2450,7 +2512,8 @@ export default function App() {
     const next = (id + tracks.length) % tracks.length;
     const audio = audioRef.current;
     const nextTrack = tracks[next];
-    if (next !== currentRef.current || audio.src !== new URL(nextTrack.src, document.baseURI).href) {
+    const intendedSource = nextTrack.src ? new URL(nextTrack.src, document.baseURI).href : '';
+    if (next !== currentRef.current || audio.src !== intendedSource) {
       cancelPlaybackPreparation();
       setCurrent(next);
       currentRef.current = next;
@@ -2511,6 +2574,7 @@ export default function App() {
     setActivePlaylist(getActivePlaylistId());
     setQQPlaylists(listQQPlaylists());
     setNeteasePlaylists(listNeteasePlaylists());
+    setKugouPlaylists(listKugouPlaylists());
     setLibraryVersion(version => version + 1);
     setJournal(false);
     setSelected(null);
@@ -2541,36 +2605,29 @@ export default function App() {
 
   const handleSwitchPlaylist = useCallback(playlistKey => {
     if (!playlistKey || playlistKey === activeLibrary) return;
-    const [provider, ...idParts] = String(playlistKey).split(':');
-    const playlistId = idParts.join(':');
-    removeImportedTracks(tracks);
-    const result = provider === 'netease'
-      ? switchNeteasePlaylist(tracks, playlistId)
-      : switchQQPlaylist(tracks, playlistId);
-    const list = provider === 'netease' ? neteasePlaylists : qqPlaylists;
-    const name = list.find(item => item.id === result.id)?.name || '歌单';
-    applyPlaylistChange(importedPlaylistKey(provider, result.id), `已切换到「${name}」· ${result.count} 首`);
-  }, [activeLibrary, applyPlaylistChange, neteasePlaylists, qqPlaylists]);
+    const { id, library } = parsePlaylistKey(playlistKey);
+    const playlist = library?.list().find(item => item.id === id);
+    if (!playlist) return;
+    const result = switchImportedTracks(playlistKey);
+    applyPlaylistChange(playlistKey, `已切换到「${playlist.name}」· ${result.count} 首`);
+  }, [activeLibrary, applyPlaylistChange]);
 
   const handleRemovePlaylist = useCallback(playlistId => {
     const name = qqPlaylists.find(item => item.id === playlistId)?.name || '歌单';
-    const result = removeQQPlaylist(tracks, playlistId);
+    const removingActive = activeLibrary === importedPlaylistKey('qq', playlistId);
+    const result = removeQQPlaylist(removingActive ? tracks : [], playlistId);
     if (!result.removed) return;
     forgetPlaylistPlayback(importedPlaylistKey('qq', playlistId));
     const nextName = qqPlaylists.find(item => item.id === result.activeId)?.name;
-    if (activeLibrary === importedPlaylistKey('qq', playlistId)) {
-      removeImportedTracks(tracks);
-      if (result.activeId) switchQQPlaylist(tracks, result.activeId);
-      else if (neteasePlaylists[0]) switchNeteasePlaylist(tracks, neteasePlaylists[0].id);
-      const nextKey = result.activeId
-        ? importedPlaylistKey('qq', result.activeId)
-        : importedPlaylistKey('netease', neteasePlaylists[0]?.id);
+    if (removingActive) {
+      const nextKey = importedPlaylistKey('qq', result.activeId) || fallbackPlaylistKey('qq');
+      switchImportedTracks(nextKey);
       applyPlaylistChange(nextKey, `已移除歌单「${name}」${nextName ? ` · 当前「${nextName}」` : ''}`);
     } else {
       setQQPlaylists(listQQPlaylists());
       showToast(`已移除歌单「${name}」`);
     }
-  }, [activeLibrary, applyPlaylistChange, neteasePlaylists, qqPlaylists, showToast]);
+  }, [activeLibrary, applyPlaylistChange, qqPlaylists, showToast]);
 
   const handleQQClear = useCallback(() => {
     clearQQTracks(tracks);
@@ -2579,18 +2636,14 @@ export default function App() {
     setLibraryVersion(version => version + 1);
     setSelected(null);
     if (activeLibrary?.startsWith('qq:')) {
-      if (neteasePlaylists[0]) {
-        removeImportedTracks(tracks);
-        switchNeteasePlaylist(tracks, neteasePlaylists[0].id);
-        applyPlaylistChange(importedPlaylistKey('netease', neteasePlaylists[0].id), '已清空 QQ 导入曲库 · 已切换到网易云歌单');
-      } else {
-        applyPlaylistChange(null, '已清空 QQ 导入曲库');
-      }
+      const nextKey = fallbackPlaylistKey('qq');
+      switchImportedTracks(nextKey);
+      applyPlaylistChange(nextKey, '已清空 QQ 导入曲库');
     } else {
       showToast('已清空 QQ 导入曲库');
     }
     clearProviderPlayback('qq');
-  }, [activeLibrary, applyPlaylistChange, neteasePlaylists, showToast]);
+  }, [activeLibrary, applyPlaylistChange, showToast]);
 
   const handleNeteaseImport = useCallback((songs, meta) => {
     const result = importNeteaseTracks(tracks, songs, meta);
@@ -2604,19 +2657,40 @@ export default function App() {
   const handleNeteaseClear = useCallback(() => {
     const currentWasNetease = activeLibrary?.startsWith('netease:');
     clearNeteaseTracks(tracks);
-    if (currentWasNetease && qqPlaylists[0]) {
-      removeImportedTracks(tracks);
-      const switched = switchQQPlaylist(tracks, getActivePlaylistId() || qqPlaylists[0].id);
-      applyPlaylistChange(importedPlaylistKey('qq', switched.id), '已清空网易云导入曲库 · 已切换到 QQ 歌单');
-    } else if (currentWasNetease || !tracks[currentRef.current]) {
-      applyPlaylistChange(null, '已清空网易云导入曲库');
+    if (currentWasNetease) {
+      const nextKey = fallbackPlaylistKey('netease');
+      switchImportedTracks(nextKey);
+      applyPlaylistChange(nextKey, '已清空网易云导入曲库');
     } else {
       setNeteasePlaylists([]);
       setLibraryVersion(version => version + 1);
       showToast('已清空网易云导入曲库');
     }
     clearProviderPlayback('netease');
-  }, [activeLibrary, applyPlaylistChange, qqPlaylists, showToast]);
+  }, [activeLibrary, applyPlaylistChange, showToast]);
+
+  const handleKugouImport = useCallback((songs, meta) => {
+    const result = importKugouTracks(songs, meta);
+    if (result.added) {
+      const nextKey = importedPlaylistKey('kugou', result.id);
+      switchImportedTracks(nextKey);
+      applyPlaylistChange(nextKey, `已导入酷狗歌单「${result.name}」· ${result.count} 首`);
+    }
+    return result;
+  }, [applyPlaylistChange]);
+
+  const handleKugouClear = useCallback(() => {
+    if (!clearKugouTracks(tracks)) return showToast('无法清空酷狗导入曲库');
+    clearProviderPlayback('kugou');
+    if (activeLibrary?.startsWith('kugou:')) {
+      const nextKey = fallbackPlaylistKey('kugou');
+      switchImportedTracks(nextKey);
+      applyPlaylistChange(nextKey, '已清空酷狗导入曲库');
+    } else {
+      setKugouPlaylists([]);
+      showToast('已清空酷狗导入曲库');
+    }
+  }, [activeLibrary, applyPlaylistChange, showToast]);
 
   const step = direction => {
     if (!tracks.length) return;
@@ -2627,6 +2701,7 @@ export default function App() {
   const track = tracks[current];
   const qqCount = qqPlaylists.reduce((total, item) => total + item.count, 0);
   const neteaseCount = neteasePlaylists.reduce((total, item) => total + item.count, 0);
+  const kugouCount = kugouPlaylists.reduce((total, item) => total + item.count, 0);
   const accounts = { qq: qqAccount, netease: neteaseAccount };
   const accountProvider = accounts[displayAccount].profile ? displayAccount
     : qqAccount.profile ? 'qq' : neteaseAccount.profile ? 'netease' : bridgeProvider;
@@ -2659,7 +2734,7 @@ export default function App() {
         onChangeView={setJournal}
         onOpenBridge={() => openBridge(accountProvider)}
         bridgeOpen={bridgeOpen}
-        profile={accounts[accountProvider].profile}
+        profile={accounts[accountProvider]?.profile}
         accountProvider={accountProvider}
         nextAccount={nextAccount}
         onSwitchAccount={switchAccount}
@@ -2695,7 +2770,7 @@ export default function App() {
       )}</GlassBackdrop>
       {!journal && (
         <div className="universe-footer">
-          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
+          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> {track?.provider === 'kugou' ? '点击在酷狗播放' : '点击即播'}</div>
           <div className="view-controls glass liquid-control">
             <GlassSurface variant="control" />
             <button onClick={() => {
@@ -2780,6 +2855,7 @@ export default function App() {
             .map(item => ({ mid: item.mid, mediaMid: item.mediaMid, title: item.title })),
         }}
         netease={{ account: neteaseAccount, onImport: handleNeteaseImport, onClear: handleNeteaseClear, importedCount: neteaseCount }}
+        kugou={{ onImport: handleKugouImport, onClear: handleKugouClear, importedCount: kugouCount }}
       />
       <div id="toast" className={toastText ? 'show' : ''} role="status">{toastText}</div>
       <audio
@@ -2851,6 +2927,7 @@ export default function App() {
               .catch(() => showToast('网易云没有返回可播放地址'));
             return;
           }
+          if (!track?.src) return;
           showToast('音源中断，正在重连…');
           reconnect();
         }}

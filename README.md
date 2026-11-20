@@ -2,7 +2,7 @@
 
 在音乐宇宙里漫游的桌面播放器。使用 React、Electron、WebGL 声波地形与 Liquid DOM 液态玻璃，将歌单、歌词和实时律动放在同一个空间里。
 
-**当前版本：2.1.5** · [下载 Windows 版](https://github.com/RootinTu/OrbitMusic/releases/latest) · [更新记录](CHANGELOG.md)
+**当前版本：2.1.6** · [下载 Windows 版](https://github.com/hb1234567898/aimusic/releases/latest) · [更新记录](CHANGELOG.md)
 
 ## 应用截图
 
@@ -32,13 +32,13 @@
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/RootinTu/OrbitMusic/releases/latest) 下载 Windows x64 安装版、便携 EXE 或 ZIP 解压版。
+1. 从 [Releases](https://github.com/hb1234567898/aimusic/releases/latest) 下载 Windows x64 安装版、便携 EXE 或 ZIP 解压版。
 2. ZIP 版须完整解压，保留 `resources`、`locales` 和 DLL 等文件，再运行 `ORBIT Music.exe`。
-3. 点击顶部 **登录**，在弹窗中选择 QQ 音乐或网易云音乐，再登录自己的账号，搜索歌曲或导入创建、收藏的歌单。QQ 音乐支持 QQ 或微信登录。
+3. 点击顶部 **音乐桥**。QQ 音乐、网易云音乐可登录账号后搜索或导入歌单；酷狗音乐在桌面版通过官网登录后，回到音乐桥读取账号的网络收藏歌单。
 4. 每个歌单最多导入 **30 首**，通过顶部歌单菜单切换当前播放列表。
-5. 两个平台都登录后，点击顶部头像即可切换平台并恢复该平台上次使用的歌单。点击旁边的 **⋯** 可管理账号或导入歌曲。
+5. QQ 音乐和网易云音乐都登录后，点击顶部头像即可在两者之间切换并恢复上次使用的歌单。点击旁边的 **⋯** 可管理账号或导入歌曲。
 
-音源按当前账号权限获取，会员或地区限制以音乐平台返回结果为准。
+音源以各音乐平台返回结果为准。酷狗歌曲使用同一个已登录会话在酷狗官方窗口播放，是否可播由酷狗网页端判定；进度、音量与播放控制在酷狗窗口内操作。
 
 ## 功能
 

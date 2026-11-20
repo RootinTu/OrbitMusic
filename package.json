@@ -1,8 +1,8 @@
 {
   "name": "orbit-music",
   "private": true,
-  "version": "2.1.5",
-  "description": "ORBIT liquid-glass music universe with QQ Music and Netease Cloud Music bridges",
+  "version": "2.1.6",
+  "description": "ORBIT liquid-glass music universe with QQ Music, Netease Cloud Music and Kugou Music bridges",
   "author": "ORBIT Music",
   "type": "module",
   "main": "desktop/main.js",
