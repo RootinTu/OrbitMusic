@@ -114,7 +114,7 @@ for (const dup of mine) {
     const tmp = path.join(os.tmpdir(), `orbit-asset-${Date.now()}-${asset.name}`);
     writeFileSync(tmp, buf);
     try {
-      await uploadReleaseAsset(primary.id, asset.name, tmp, asset.label || '');
+      await uploadReleaseAsset(primary, asset.name, tmp, asset.label || '');
       owned.add(asset.name);
     } finally {
       rmSync(tmp, { force: true });
@@ -163,7 +163,7 @@ const sigTmpPath = path.join(os.tmpdir(), `orbit-latest-${Date.now()}.yml.sig`);
 writeFileSync(sigTmpPath, `${manifestSig}\n`, 'utf8');
 try {
   console.log('[fix-release] 上传 Ed25519 清单签名 latest.yml.sig');
-  await uploadReleaseAsset(primary.id, 'latest.yml.sig', sigTmpPath, '');
+  await uploadReleaseAsset(primary, 'latest.yml.sig', sigTmpPath, '');
 } finally {
   rmSync(sigTmpPath, { force: true });
 }
@@ -179,8 +179,9 @@ if (primary.draft) {
   console.log('[fix-release] 主 Release 已经是正式发布状态');
 }
 
-async function uploadReleaseAsset(releaseId, name, filePath, label) {
-  const url = `${uploadBase}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}${label ? `&label=${encodeURIComponent(label)}` : ''}`;
+async function uploadReleaseAsset(release, name, filePath, label) {
+  const baseUpload = String(release?.upload_url || `${uploadBase}/releases/${release?.id}/assets`).replace(/\{[^}]*\}$/, '');
+  const url = `${baseUpload}?name=${encodeURIComponent(name)}${label ? `&label=${encodeURIComponent(label)}` : ''}`;
   const size = statSync(filePath).size;
   const body = readFileSync(filePath);
   const res = await fetch(url, {
