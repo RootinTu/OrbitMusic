@@ -74,7 +74,6 @@ export default function QQBridge({
   const [checkRows, setCheckRows] = useState([]);
   const [checkRunning, setCheckRunning] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
-  const [playlistView, setPlaylistView] = useState(() => playlists.length ? 'local' : 'account');
   const desktop = Boolean(window.orbitDesktop?.isDesktop);
 
   const songKey = (song, index) => `${song?.mid || song?.id || index}`;
@@ -136,7 +135,6 @@ export default function QQBridge({
     setClearArmed(false);
     setCheckOpen(false);
     if (browseAccountPlaylists) {
-      setPlaylistView('account');
       setPreview(null);
       setSelected(new Set());
     }
@@ -318,7 +316,6 @@ export default function QQBridge({
       creator: preview.creator || '',
       sourceUrl: preview.sourceUrl || '',
     });
-    setPlaylistView('local');
     closePreview();
   };
 
@@ -442,59 +439,46 @@ export default function QQBridge({
                   </div>
                 </div>
 
-                <div className="bridge-library-tabs" role="tablist" aria-label="歌单来源">
-                  <BridgeGlassButton className={playlistView === 'local' ? 'active' : ''} onClick={() => setPlaylistView('local')} role="tab" aria-selected={playlistView === 'local'}>
-                    本机歌单 <span>{playlists.length}</span>
-                  </BridgeGlassButton>
-                  <BridgeGlassButton className={playlistView === 'account' ? 'active' : ''} onClick={() => setPlaylistView('account')} role="tab" aria-selected={playlistView === 'account'}>
-                    音乐账号 <span>{accountPlaylists.length}</span>
-                  </BridgeGlassButton>
-                </div>
-
                 <div className="bridge-playlists">
-                  {playlistView === 'local' ? (
-                    playlists.length ? (
-                      <section className="bridge-playlist-group bridge-playlist-stack">
-                        {playlists.map(playlist => (
-                          <div className={`bridge-playlist-row ${activePlaylistId === playlist.id ? 'active' : ''}`} key={playlist.id}>
-                            <button className="bridge-playlist" onClick={() => onSwitchPlaylist(playlist.id)} title={`切换到「${playlist.name}」`}>
-                              <Art src={playlist.cover} title={playlist.name} />
-                              <span><strong>{playlist.name}</strong><small>{playlist.count} 首{playlist.creator ? ` · ${playlist.creator}` : ''}</small></span>
-                              <b>{activePlaylistId === playlist.id ? '播放中' : '切换'}</b>
-                            </button>
-                            <button className="bridge-playlist-drop" onClick={() => onRemovePlaylist(playlist.id)} aria-label={`移除歌单 ${playlist.name}`} title={`移除「${playlist.name}」`}>×</button>
-                          </div>
-                        ))}
-                      </section>
-                    ) : <div className="bridge-empty">还没有本机歌单。可粘贴链接打开，或从已登录账号中挑选。</div>
-                  ) : (
-                    <>
-                      {playlistGroups.map(group => group.items.length > 0 && (
-                        <section className="bridge-playlist-group" key={group.key}>
-                          <h3>{group.label}<span>{group.items.length}</span></h3>
-                          {group.items.map(playlist => (
-                            <button className="bridge-playlist" key={playlist.id} onClick={() => openPlaylist(playlist.id)} disabled={busy === `playlist:${playlist.id}` || playlistFull}>
-                              <Art src={playlist.cover} title={playlist.name} />
-                              <span><strong>{playlist.name}</strong><small>{playlist.trackCount || 0} 首 · {playlist.creator}</small></span>
-                              <b>{busy === `playlist:${playlist.id}` ? '打开中' : '挑歌'}</b>
-                            </button>
-                          ))}
-                        </section>
+                  {playlists.length > 0 && (
+                    <section className="bridge-playlist-group bridge-playlist-stack">
+                      <h3>本机歌单 <span>{playlists.length}</span></h3>
+                      {playlists.map(playlist => (
+                        <div className={`bridge-playlist-row ${activePlaylistId === playlist.id ? 'active' : ''}`} key={playlist.id}>
+                          <button className="bridge-playlist" onClick={() => onSwitchPlaylist(playlist.id)} title={`切换到「${playlist.name}」`}>
+                            <Art src={playlist.cover} title={playlist.name} />
+                            <span><strong>{playlist.name}</strong><small>{playlist.count} 首{playlist.creator ? ` · ${playlist.creator}` : ''}</small></span>
+                            <b>{activePlaylistId === playlist.id ? '播放中' : '切换'}</b>
+                          </button>
+                          <button className="bridge-playlist-drop" onClick={() => onRemovePlaylist(playlist.id)} aria-label={`移除歌单 ${playlist.name}`} title={`移除「${playlist.name}」`}>×</button>
+                        </div>
                       ))}
-                      {!profile && <div className="bridge-empty">连接桌面账号后，这里会显示“我喜欢”和创建、收藏的歌单。</div>}
-                      {profile && !accountPlaylists.length && (
-                        <div className="bridge-empty">
-                          QQ 音乐暂未返回账号歌单；也可以粘贴自建歌单链接或 ID。
-                          {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
-                        </div>
-                      )}
-                      {profile && accountPlaylists.length > 0 && !createdCount && (
-                        <div className="bridge-empty">
-                          没有读到“我创建的歌单”，只显示了收藏部分。
-                          {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
-                        </div>
-                      )}
-                    </>
+                    </section>
+                  )}
+                  {playlistGroups.map(group => group.items.length > 0 && (
+                    <section className="bridge-playlist-group" key={group.key}>
+                      <h3>{group.label}<span>{group.items.length}</span></h3>
+                      {group.items.map(playlist => (
+                        <button className="bridge-playlist" key={playlist.id} onClick={() => openPlaylist(playlist.id)} disabled={busy === `playlist:${playlist.id}` || playlistFull}>
+                          <Art src={playlist.cover} title={playlist.name} />
+                          <span><strong>{playlist.name}</strong><small>{playlist.trackCount || 0} 首 · {playlist.creator}</small></span>
+                          <b>{busy === `playlist:${playlist.id}` ? '打开中' : '挑歌'}</b>
+                        </button>
+                      ))}
+                    </section>
+                  ))}
+                  {!profile && !playlists.length && <div className="bridge-empty">连接桌面账号后，这里会显示“我喜欢”和创建、收藏的歌单。</div>}
+                  {profile && !accountPlaylists.length && (
+                    <div className="bridge-empty">
+                      QQ 音乐暂未返回账号歌单；也可以粘贴自建歌单链接或 ID。
+                      {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
+                    </div>
+                  )}
+                  {profile && accountPlaylists.length > 0 && !createdCount && (
+                    <div className="bridge-empty">
+                      没有读到“我创建的歌单”，只显示了收藏部分。
+                      {diagnostics ? <span className="bridge-diag">{describeDiagnostics(diagnostics)}</span> : null}
+                    </div>
                   )}
                 </div>
               </>

@@ -2046,6 +2046,7 @@ export default function App() {
   const [activePlaylist, setActivePlaylist] = useState(getActivePlaylistId);
   const [neteasePlaylists, setNeteasePlaylists] = useState(listNeteasePlaylists);
   const [kugouPlaylists, setKugouPlaylists] = useState(listKugouPlaylists);
+  const kugouActiveRef = useRef(false);
   const [activeLibrary, setActiveLibrary] = useState(initialActiveLibrary);
   const combinedPlaylists = useMemo(() => [
     ...qqPlaylists.map(item => ({ ...item, id: importedPlaylistKey('qq', item.id), rawId: item.id, provider: 'qq' })),
@@ -2422,18 +2423,28 @@ export default function App() {
       try {
         const result = await window.orbitDesktop.openKugouPlayer(currentTrack.hash, currentTrack.albumId, currentTrack.pageId);
         if (preparingRef.current !== request) return;
-        if (result?.reason === 'login') {
+        if (result?.ok) {
+          kugouActiveRef.current = true;
+        } else if (result?.reason === 'login') {
+          kugouActiveRef.current = false;
           showToast('请先登录酷狗账号');
           openBridge('kugou');
-        } else if (!result?.ok) showToast(result?.message || '无法打开酷狗官方播放器');
+        } else {
+          kugouActiveRef.current = false;
+          showToast(result?.message || '无法打开酷狗官方播放器');
+        }
       } catch {
-        if (preparingRef.current === request) showToast('无法打开酷狗官方播放器');
+        if (preparingRef.current === request) {
+          kugouActiveRef.current = false;
+          showToast('无法打开酷狗官方播放器');
+        }
       } finally {
         if (preparingRef.current === request) cancelPlaybackPreparation();
       }
       return;
     }
     if (!media) return;
+    kugouActiveRef.current = false;
     window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     const request = {};
     const isCurrent = () => preparingRef.current === request && mediaRef.current === media;
@@ -2579,6 +2590,8 @@ export default function App() {
     setJournal(false);
     setSelected(null);
     cancelPlaybackPreparation();
+    kugouActiveRef.current = false;
+    window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     audioRef.current.pause();
     setPlaying(false);
     const next = readLastTrack(nextActiveKey, tracks);
@@ -2681,6 +2694,8 @@ export default function App() {
 
   const handleKugouClear = useCallback(() => {
     if (!clearKugouTracks(tracks)) return showToast('无法清空酷狗导入曲库');
+    kugouActiveRef.current = false;
+    window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     clearProviderPlayback('kugou');
     if (activeLibrary?.startsWith('kugou:')) {
       const nextKey = fallbackPlaylistKey('kugou');
@@ -2695,7 +2710,8 @@ export default function App() {
   const step = direction => {
     if (!tracks.length) return;
     const next = random ? (current + 1 + Math.floor(Math.random() * (tracks.length - 1))) % tracks.length : current + direction;
-    selectTrack(next, !audioRef.current.paused);
+    const shouldPlay = tracks[current]?.provider === 'kugou' ? kugouActiveRef.current : !audioRef.current.paused;
+    selectTrack(next, shouldPlay);
   };
 
   const track = tracks[current];
@@ -2855,7 +2871,14 @@ export default function App() {
             .map(item => ({ mid: item.mid, mediaMid: item.mediaMid, title: item.title })),
         }}
         netease={{ account: neteaseAccount, onImport: handleNeteaseImport, onClear: handleNeteaseClear, importedCount: neteaseCount }}
-        kugou={{ onImport: handleKugouImport, onClear: handleKugouClear, importedCount: kugouCount }}
+        kugou={{
+          onImport: handleKugouImport,
+          onClear: handleKugouClear,
+          importedCount: kugouCount,
+          playlists: kugouPlaylists,
+          activePlaylistId: activeLibrary?.startsWith('kugou:') ? activeLibrary.slice(6) : null,
+          onSwitchPlaylist: id => handleSwitchPlaylist(importedPlaylistKey('kugou', id)),
+        }}
       />
       <div id="toast" className={toastText ? 'show' : ''} role="status">{toastText}</div>
       <audio

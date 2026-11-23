@@ -5,7 +5,10 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkForVerifiedUpdate, createVersionedTaskQueue, downloadVerifiedUpdate } from './update-download.mjs';
-import { KUGOU_HOME, kugouSongPage, listKugouAccountPlaylists, listKugouAccountSongs } from './kugou-session.mjs';
+import {
+  KUGOU_HOME, createKugouQrLogin, getKugouSessionStatus, kugouSongPage,
+  listKugouAccountSongs, pollKugouQrLogin, readKugouSessionProfile,
+} from './kugou-session.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(__dirname, '..');
@@ -226,18 +229,82 @@ function kugouWindow(owner, title, login) {
   return win;
 }
 
+function revealKugouWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function isSameDocumentUrl(a, b) {
+  try {
+    const first = new URL(a);
+    const second = new URL(b);
+    return first.origin === second.origin && first.pathname === second.pathname && first.search === second.search;
+  } catch {
+    return false;
+  }
+}
+
 async function showKugouLogin(owner) {
   if (kugouLoginWindow && !kugouLoginWindow.isDestroyed()) {
-    kugouLoginWindow.show();
+    revealKugouWindow(kugouLoginWindow);
     return { ok: true };
   }
   const win = kugouLoginWindow = kugouWindow(owner, '酷狗官网登录 · ORBIT Bridge', true);
-  win.once('closed', () => { if (kugouLoginWindow === win) kugouLoginWindow = null; });
+  const cookieSession = session.fromPartition(KUGOU_LOGIN_PARTITION);
+  let settled = false;
+  let checking = false;
+  let pollTimer = null;
+
+  const stopWatching = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  const emitAuthResult = (result) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send('orbit-kugou-auth', result);
+  };
+
+  const checkLogin = async (fromClose = false) => {
+    if (settled || checking) return;
+    checking = true;
+    try {
+      const result = await getKugouSessionStatus(cookieSession);
+      if (result?.ok) {
+        settled = true;
+        stopWatching();
+        if (!win.isDestroyed()) win.close();
+        emitAuthResult(result);
+        revealMainWindow();
+      } else if (fromClose) {
+        emitAuthResult(result || { ok: false, reason: 'login' });
+      }
+    } catch (error) {
+      if (fromClose) emitAuthResult({ ok: false, message: error?.message || '酷狗状态读取失败，请确认登录状态或网络。' });
+    } finally {
+      checking = false;
+    }
+  };
+
+  win.webContents.on('did-finish-load', () => { checkLogin(false); });
+  pollTimer = setInterval(() => { checkLogin(false); }, 1500);
+
+  win.once('closed', () => {
+    stopWatching();
+    if (kugouLoginWindow === win) kugouLoginWindow = null;
+    if (!settled) checkLogin(true);
+  });
+
   try {
     await win.loadURL(KUGOU_HOME);
-    if (!win.isDestroyed()) win.show();
+    if (!settled) revealKugouWindow(win);
     return { ok: true };
   } catch {
+    stopWatching();
     if (!win.isDestroyed()) win.destroy();
     return { ok: false, message: '无法打开酷狗官网登录页' };
   }
@@ -247,7 +314,7 @@ async function showKugouPlayer(owner, hash, albumId, pageId) {
   const link = kugouSongPage(hash, albumId, pageId);
   if (!link) return { ok: false, message: '无效的酷狗歌曲编号' };
   const request = ++kugouPlayerRequest;
-  const account = await listKugouAccountPlaylists(session.fromPartition(KUGOU_LOGIN_PARTITION));
+  const account = await readKugouSessionProfile(session.fromPartition(KUGOU_LOGIN_PARTITION));
   if (request !== kugouPlayerRequest) return { ok: false, reason: 'superseded' };
   if (!account.ok) return account;
   if (!kugouPlayerWindow || kugouPlayerWindow.isDestroyed()) {
@@ -255,8 +322,23 @@ async function showKugouPlayer(owner, hash, albumId, pageId) {
     win.once('closed', () => { if (kugouPlayerWindow === win) kugouPlayerWindow = null; });
   }
   const win = kugouPlayerWindow;
-  if (win.webContents.getURL() !== link) await win.loadURL(link);
-  if (request === kugouPlayerRequest && !win.isDestroyed()) win.show();
+  const previousUrl = win.webContents.getURL();
+  if (previousUrl !== link) {
+    try {
+      const sameDoc = Boolean(previousUrl) && isSameDocumentUrl(previousUrl, link);
+      await win.loadURL(link);
+      // 仅 hash 变更时（例如 /song/#hash=...），loadURL 只会触发同文档导航，需强制刷新以确保播放器切歌。
+      if (sameDoc && request === kugouPlayerRequest && !win.isDestroyed()) {
+        await win.webContents.reload();
+      }
+    } catch {
+      if (request !== kugouPlayerRequest || win.isDestroyed()) {
+        return { ok: false, reason: 'superseded' };
+      }
+      throw new Error('无法加载酷狗播放页面');
+    }
+  }
+  if (request === kugouPlayerRequest) revealKugouWindow(win);
   return { ok: true };
 }
 
@@ -495,14 +577,17 @@ ipcMain.handle('orbit-open-netease-login', event => openNeteaseLoginWindow(Brows
 ipcMain.handle('orbit-refresh-netease-login', () => syncCurrentNeteaseCookie());
 function handleKugou(channel, fn) {
   ipcMain.handle(`orbit-kugou-${channel}`, async (event, ...args) => {
+    const frameUrl = event.senderFrame?.url;
     if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame ||
-        new URL(event.senderFrame.url).origin !== new URL(appUrl).origin) return { ok: false };
+        !frameUrl || new URL(frameUrl).origin !== new URL(appUrl).origin) return { ok: false };
     try { return await fn(event, ...args); }
-    catch { return { ok: false, message: '酷狗请求未完成，请检查网络或在官网确认登录状态。' }; }
+    catch (error) { return { ok: false, message: error?.message || '酷狗请求未完成，请检查网络或在官网确认登录状态。' }; }
   });
 }
 handleKugou('login', event => showKugouLogin(BrowserWindow.fromWebContents(event.sender)));
-handleKugou('playlists', () => listKugouAccountPlaylists(session.fromPartition(KUGOU_LOGIN_PARTITION)));
+handleKugou('qr-create', () => createKugouQrLogin(session.fromPartition(KUGOU_LOGIN_PARTITION)));
+handleKugou('qr-poll', (_event, key, mid) => pollKugouQrLogin(session.fromPartition(KUGOU_LOGIN_PARTITION), key, mid));
+handleKugou('playlists', () => getKugouSessionStatus(session.fromPartition(KUGOU_LOGIN_PARTITION)));
 handleKugou('songs', (_event, id) => listKugouAccountSongs(session.fromPartition(KUGOU_LOGIN_PARTITION), id));
 handleKugou('play', (event, hash, albumId, pageId) => showKugouPlayer(BrowserWindow.fromWebContents(event.sender), hash, albumId, pageId));
 handleKugou('stop', stopKugouPlayer);
