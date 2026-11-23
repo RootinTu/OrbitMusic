@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign, verify as cryptoVerify } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -11,6 +12,31 @@ const MIRROR_PREFIXES = [
   'https://gh-proxy.org/',
 ];
 const LATEST_MANIFEST_URL = `https://github.com/${OWNER}/${REPO}/releases/latest/download/latest.yml`;
+export const DEFAULT_UPDATE_PUBLIC_KEY = [
+  '-----BEGIN PUBLIC KEY-----',
+  'MCowBQYDK2VwAyEAGcxiHcHgBmCLGjWrpXUrGnSI5l6d2QGu25cuh9ef/J8=',
+  '-----END PUBLIC KEY-----',
+].join('\n');
+
+export function signManifestContent(manifestText, privateKeyPem) {
+  const key = createPrivateKey(privateKeyPem);
+  const payload = Buffer.isBuffer(manifestText) ? manifestText : Buffer.from(String(manifestText), 'utf8');
+  return cryptoSign(null, payload, key).toString('base64');
+}
+
+export function verifyManifestSignature(manifestText, signatureBase64, publicKeyPem = DEFAULT_UPDATE_PUBLIC_KEY) {
+  const cleanSig = String(signatureBase64 || '').trim();
+  if (!cleanSig || cleanSig.length > 512 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleanSig)) return false;
+  try {
+    const signature = Buffer.from(cleanSig, 'base64');
+    if (signature.length !== 64) return false;
+    const key = createPublicKey(publicKeyPem);
+    const payload = Buffer.isBuffer(manifestText) ? manifestText : Buffer.from(String(manifestText), 'utf8');
+    return cryptoVerify(null, payload, key, signature);
+  } catch {
+    return false;
+  }
+}
 
 export function createVersionedTaskQueue() {
   let activeVersion = '';
@@ -82,31 +108,53 @@ export function buildManifestCandidates(preferMirrors = false) {
   return preferMirrors ? [...mirrors, LATEST_MANIFEST_URL] : [LATEST_MANIFEST_URL, ...mirrors];
 }
 
-async function fetchManifest(url, timeoutMs) {
+async function fetchBoundedText(url, { timeoutMs, maxBytes, fetchImpl = fetch, accept = 'text/plain,*/*' }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('更新线路连接超时')), timeoutMs);
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       redirect: 'follow',
       signal: controller.signal,
-      headers: { 'User-Agent': 'ORBIT-Music-Updater', Accept: 'text/yaml,text/plain,*/*' },
+      headers: { 'User-Agent': 'ORBIT-Music-Updater', Accept: accept },
     });
+    if (String(url).startsWith('https://') && String(response.url || url).startsWith('http://')) {
+      throw new Error('更新线路发生了不安全的 HTTP 降级');
+    }
     if (!response.ok) throw new Error(`更新线路返回 ${response.status}`);
     const declaredLength = Number(response.headers.get('content-length')) || 0;
-    if (declaredLength > 64 * 1024) throw new Error('更新清单异常过大');
+    if (declaredLength > maxBytes) throw new Error('更新清单异常过大');
     const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > 64 * 1024) throw new Error('更新清单异常过大');
-    return parseUpdateManifest(text);
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('更新清单异常过大');
+    return text;
   } finally {
     clearTimeout(timer);
   }
 }
 
-export async function checkForVerifiedUpdate({ currentVersion, preferMirrors = false, timeoutMs = 12000 }) {
+async function fetchManifest(url, timeoutMs, { fetchImpl = fetch, publicKey = DEFAULT_UPDATE_PUBLIC_KEY } = {}) {
+  const [text, sigText] = await Promise.all([
+    fetchBoundedText(url, { timeoutMs, maxBytes: 64 * 1024, fetchImpl, accept: 'text/yaml,text/plain,*/*' }),
+    fetchBoundedText(`${url}.sig`, { timeoutMs, maxBytes: 4 * 1024, fetchImpl, accept: 'text/plain,*/*' }),
+  ]);
+  if (!verifyManifestSignature(text, sigText, publicKey)) {
+    throw new Error('更新清单数字签名验证失败');
+  }
+  return parseUpdateManifest(text);
+}
+
+export async function checkForVerifiedUpdate({
+  currentVersion,
+  preferMirrors = false,
+  timeoutMs = 12000,
+  fetchImpl = fetch,
+  publicKey = DEFAULT_UPDATE_PUBLIC_KEY,
+  candidates = null,
+}) {
   const errors = [];
-  for (const url of buildManifestCandidates(preferMirrors)) {
+  const manifestUrls = Array.isArray(candidates) ? candidates : buildManifestCandidates(preferMirrors);
+  for (const url of manifestUrls) {
     try {
-      const info = await fetchManifest(url, timeoutMs);
+      const info = await fetchManifest(url, timeoutMs, { fetchImpl, publicKey });
       return {
         available: compareVersions(info.version, currentVersion) > 0,
         info,
@@ -413,4 +461,69 @@ export async function downloadVerifiedUpdate({
     ? `；已保留 ${progressPercent(preserved, Number(file.size) || 0)}% 分片，下次将从断点继续`
     : '';
   throw new Error(`所有更新线路均失败：${errors.join('；')}${resumeHint}`);
+}
+
+export function verifyWindowsAuthenticode(filePath, { execFileImpl = execFile, platform = process.platform } = {}) {
+  if (platform !== 'win32') return Promise.resolve({ status: 'Skipped', thumbprint: '', subject: '' });
+  return new Promise((resolve, reject) => {
+    const script = '$s = Get-AuthenticodeSignature -LiteralPath $env:ORBIT_VERIFY_FILE; '
+      + '[PSCustomObject]@{ status = $s.Status.ToString(); thumbprint = if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint } else { "" }; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { "" } } | ConvertTo-Json -Compress';
+    execFileImpl(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      {
+        env: { ...process.env, ORBIT_VERIFY_FILE: filePath },
+        timeout: 15000,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        if (error) return reject(new Error(`安装包签名检查执行失败：${error.message}`));
+        try {
+          const parsed = JSON.parse(String(stdout || '').trim());
+          resolve({
+            status: String(parsed?.status || 'UnknownError'),
+            thumbprint: String(parsed?.thumbprint || '').toUpperCase(),
+            subject: String(parsed?.subject || ''),
+          });
+        } catch {
+          reject(new Error('无法解析安装包数字签名检查结果'));
+        }
+      },
+    );
+  });
+}
+
+export async function verifyInstallerBeforeLaunch({
+  filePath,
+  expectedSha512,
+  expectedSize = 0,
+  requireAuthenticode = false,
+  allowedThumbprints = [],
+  verifyAuthenticodeImpl = verifyWindowsAuthenticode,
+}) {
+  if (!filePath || !expectedSha512) throw new Error('缺少安装包校验信息，已拒绝执行安装');
+  const entry = await stat(filePath);
+  if (!entry.isFile()) throw new Error('安装包文件不存在');
+  if (expectedSize > 0 && entry.size !== Number(expectedSize)) {
+    throw new Error('安装前复核失败：安装包大小与已验签清单不一致');
+  }
+  const actualSha512 = await fileSha512(filePath);
+  if (actualSha512 !== expectedSha512) {
+    throw new Error('安装前复核失败：安装包 SHA-512 已被篡改');
+  }
+  const auth = await verifyAuthenticodeImpl(filePath);
+  const allowed = new Set(allowedThumbprints.map(item => String(item || '').trim().toUpperCase()).filter(Boolean));
+  if (auth.status === 'Valid') {
+    if (allowed.size > 0 && !allowed.has(auth.thumbprint)) {
+      throw new Error('安装包数字签名证书指纹不在可信白名单中');
+    }
+    return { ok: true, authenticode: auth };
+  }
+  if (auth.status === 'NotSigned' || auth.status === 'Skipped') {
+    if (requireAuthenticode || allowed.size > 0) {
+      throw new Error('安装包缺少可信的 Authenticode 数字签名，已拒绝安装');
+    }
+    return { ok: true, authenticode: auth };
+  }
+  throw new Error(`安装包数字签名无效（${auth.status}），已拒绝安装`);
 }

@@ -4,7 +4,10 @@ import { app, BrowserWindow, ipcMain, powerSaveBlocker, session, shell } from 'e
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkForVerifiedUpdate, createVersionedTaskQueue, downloadVerifiedUpdate } from './update-download.mjs';
+import {
+  checkForVerifiedUpdate, createVersionedTaskQueue,
+  downloadVerifiedUpdate, verifyInstallerBeforeLaunch,
+} from './update-download.mjs';
 import {
   KUGOU_HOME, createKugouQrLogin, getKugouSessionStatus, kugouSongPage,
   listKugouAccountSongs, pollKugouQrLogin, readKugouSessionProfile,
@@ -713,6 +716,20 @@ ipcMain.handle('orbit-install-update', async () => {
   if (!updaterEnabled) return { ok: false, reason: 'dev' };
   if (!downloadedInstallerPath || downloadedInstallerVersion !== pendingUpdateInfo?.version) {
     return { ok: false, reason: 'not-downloaded' };
+  }
+  const targetFile = pendingUpdateInfo?.files?.find(item => item?.sha512) || pendingUpdateInfo;
+  try {
+    await verifyInstallerBeforeLaunch({
+      filePath: downloadedInstallerPath,
+      expectedSha512: targetFile?.sha512 || pendingUpdateInfo?.sha512,
+      expectedSize: targetFile?.size || 0,
+    });
+  } catch (verifyError) {
+    downloadedInstallerPath = '';
+    downloadedInstallerVersion = '';
+    const message = verifyError?.message || '安装包安全校验未通过';
+    emitUpdateState({ phase: 'error', message, version: pendingUpdateInfo?.version });
+    return { ok: false, reason: message };
   }
   const error = await shell.openPath(downloadedInstallerPath);
   if (error) return { ok: false, reason: error };

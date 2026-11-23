@@ -17,9 +17,10 @@
  *   5. 校验 /releases/latest 确实指向本版本
  */
 import { spawn } from 'node:child_process';
-import { readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { signManifestContent, verifyManifestSignature } from '../desktop/update-download.mjs';
 
 const repo = { owner: 'hb1234567898', name: 'aimusic' };
 const apiBase = `https://api.github.com/repos/${repo.owner}/${repo.name}`;
@@ -124,6 +125,49 @@ for (const dup of mine) {
   await api(`/releases/${dup.id}`, { method: 'DELETE' });
 }
 
+// 为 latest.yml 生成并上传 Ed25519 数字签名（latest.yml.sig），防第三方更新镜像篡改清单
+const privateKeyPath = process.env.ORBIT_UPDATE_PRIVATE_KEY_PATH
+  || path.join(os.homedir(), '.orbit-release', 'manifest-ed25519.pem');
+const privateKeyPem = process.env.ORBIT_UPDATE_PRIVATE_KEY
+  || (existsSync(privateKeyPath) ? readFileSync(privateKeyPath, 'utf8') : '');
+if (!privateKeyPem) {
+  console.error(`缺少更新清单签名私钥：请设置 ORBIT_UPDATE_PRIVATE_KEY 或在 ${privateKeyPath} 放置 Ed25519 私钥`);
+  process.exit(1);
+}
+const outputDir = process.env.ORBIT_BUILD_OUTPUT || path.join(os.tmpdir(), 'orbit-build');
+const localManifestPath = path.join(outputDir, 'latest.yml');
+let manifestBytes;
+if (existsSync(localManifestPath)) {
+  manifestBytes = readFileSync(localManifestPath);
+} else {
+  const remoteManifest = primary.assets.find(a => a.name === 'latest.yml');
+  if (!remoteManifest) {
+    console.error('[fix-release] 主 Release 缺少 latest.yml，无法签发签名');
+    process.exit(1);
+  }
+  manifestBytes = Buffer.from(await (await fetch(remoteManifest.url, {
+    headers: { ...headers, Accept: 'application/octet-stream' },
+  })).arrayBuffer());
+}
+const manifestSig = signManifestContent(manifestBytes, privateKeyPem);
+if (!verifyManifestSignature(manifestBytes, manifestSig)) {
+  console.error('[fix-release] 私钥与客户端内嵌 Ed25519 公钥不匹配，已中止发布');
+  process.exit(1);
+}
+const existingSig = primary.assets.find(a => a.name === 'latest.yml.sig');
+if (existingSig) {
+  console.log(`[fix-release] 删除旧的 latest.yml.sig (asset id=${existingSig.id})`);
+  await api(`/releases/assets/${existingSig.id}`, { method: 'DELETE' });
+}
+const sigTmpPath = path.join(os.tmpdir(), `orbit-latest-${Date.now()}.yml.sig`);
+writeFileSync(sigTmpPath, `${manifestSig}\n`, 'utf8');
+try {
+  console.log('[fix-release] 上传 Ed25519 清单签名 latest.yml.sig');
+  await uploadReleaseAsset(primary.id, 'latest.yml.sig', sigTmpPath, '');
+} finally {
+  rmSync(sigTmpPath, { force: true });
+}
+
 if (primary.draft) {
   console.log(`[fix-release] 把主 Release id=${primary.id} 的 draft 置为 false`);
   await api(`/releases/${primary.id}`, {
@@ -161,4 +205,9 @@ if (latest.tag_name !== tag) {
   console.error(`校验失败：/releases/latest 仍是 ${latest.tag_name}，客户端不会发现 ${tag}`);
   process.exit(1);
 }
-console.log(`[fix-release] 校验通过，资源清单：${latest.assets.map(a => a.name).join(', ')}`);
+const assetNames = latest.assets.map(a => a.name);
+if (!assetNames.includes('latest.yml') || !assetNames.includes('latest.yml.sig')) {
+  console.error(`校验失败：${tag} 缺少 latest.yml 或 latest.yml.sig`);
+  process.exit(1);
+}
+console.log(`[fix-release] 校验通过，资源清单：${assetNames.join(', ')}`);

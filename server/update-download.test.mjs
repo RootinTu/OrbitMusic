@@ -1,16 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
   buildManifestCandidates,
   buildUpdateCandidates,
+  checkForVerifiedUpdate,
   compareVersions,
   createVersionedTaskQueue,
   downloadResumableFile,
   parseUpdateManifest,
+  signManifestContent,
+  verifyInstallerBeforeLaunch,
+  verifyManifestSignature,
 } from '../desktop/update-download.mjs';
 
 const info = {
@@ -301,4 +305,78 @@ test('keeps a partial file after retries are exhausted so a later app run can re
   assert.equal((await readFile(partialPath)).length, prefix);
   assert.equal(retries.length, 1);
   assert.equal(retries[0].percent, 13);
+});
+
+test('Ed25519 manifest signature rejects tampered manifests and falls back to a valid source', async () => {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+  const goodYaml = `version: 2.1.8\nfiles:\n  - url: ORBIT-Music-Setup-2.1.8.exe\n    sha512: ${Buffer.alloc(64, 7).toString('base64')}\n    size: 4096\n`;
+  const evilYaml = `version: 2.1.8\nfiles:\n  - url: ORBIT-Music-Setup-2.1.8.exe\n    sha512: ${Buffer.alloc(64, 9).toString('base64')}\n    size: 4096\n`;
+  const goodSig = signManifestContent(goodYaml, privateKey);
+
+  assert.equal(verifyManifestSignature(goodYaml, goodSig, publicKey), true);
+  assert.equal(verifyManifestSignature(evilYaml, goodSig, publicKey), false);
+  assert.equal(verifyManifestSignature(goodYaml, 'not-a-valid-sig', publicKey), false);
+
+  const requested = [];
+  const result = await checkForVerifiedUpdate({
+    currentVersion: '2.1.7',
+    publicKey,
+    candidates: ['https://evil.mirror.invalid/latest.yml', 'https://good.mirror.invalid/latest.yml'],
+    fetchImpl: async url => {
+      requested.push(url);
+      if (url === 'https://evil.mirror.invalid/latest.yml') return new Response(evilYaml, { status: 200 });
+      if (url === 'https://evil.mirror.invalid/latest.yml.sig') return new Response(goodSig, { status: 200 });
+      if (url === 'https://good.mirror.invalid/latest.yml') return new Response(goodYaml, { status: 200 });
+      if (url === 'https://good.mirror.invalid/latest.yml.sig') return new Response(goodSig, { status: 200 });
+      return new Response('', { status: 404 });
+    },
+  });
+  assert.equal(result.available, true);
+  assert.equal(result.info.version, '2.1.8');
+  assert.ok(requested.includes('https://evil.mirror.invalid/latest.yml.sig'));
+  assert.ok(requested.includes('https://good.mirror.invalid/latest.yml.sig'));
+});
+
+test('pre-launch installer verification enforces SHA-512 integrity and Authenticode status', async t => {
+  const installerPath = await temporaryPartial(t, fixture);
+  const sha = digest(fixture);
+
+  // Valid signature + matching SHA-512 passes
+  const okValid = await verifyInstallerBeforeLaunch({
+    filePath: installerPath,
+    expectedSha512: sha,
+    expectedSize: fixture.length,
+    requireAuthenticode: true,
+    allowedThumbprints: ['AABBCC'],
+    verifyAuthenticodeImpl: async () => ({ status: 'Valid', thumbprint: 'AABBCC', subject: 'CN=ORBIT' }),
+  });
+  assert.equal(okValid.ok, true);
+
+  // Tampered Authenticode status (HashMismatch) is always rejected
+  await assert.rejects(verifyInstallerBeforeLaunch({
+    filePath: installerPath,
+    expectedSha512: sha,
+    expectedSize: fixture.length,
+    verifyAuthenticodeImpl: async () => ({ status: 'HashMismatch', thumbprint: '', subject: '' }),
+  }), /数字签名无效/);
+
+  // Unsigned installer is rejected when requireAuthenticode is enabled
+  await assert.rejects(verifyInstallerBeforeLaunch({
+    filePath: installerPath,
+    expectedSha512: sha,
+    expectedSize: fixture.length,
+    requireAuthenticode: true,
+    verifyAuthenticodeImpl: async () => ({ status: 'NotSigned', thumbprint: '', subject: '' }),
+  }), /缺少可信的 Authenticode 数字签名/);
+
+  // On-disk tampering (TOCTOU) is rejected before execution
+  await assert.rejects(verifyInstallerBeforeLaunch({
+    filePath: installerPath,
+    expectedSha512: digest(Buffer.from('different-binary')),
+    expectedSize: fixture.length,
+    verifyAuthenticodeImpl: async () => ({ status: 'Valid', thumbprint: 'AABBCC', subject: 'CN=ORBIT' }),
+  }), /SHA-512 已被篡改/);
 });
