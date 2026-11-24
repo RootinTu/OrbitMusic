@@ -135,8 +135,6 @@ export default function Universe({ current, playing, currentTime, duration, onSe
     };
 
     let beatPulse = 0;
-    let lyricsPanel = null;
-    let lastBeatValue = -1;
 
     // 每帧只采一次细频谱：地形要用，节拍引擎的兜底分支也可能要用。
     // 之前地形和节拍各调一次 getByteFrequencyData，同一帧读两遍纯属浪费。
@@ -790,20 +788,10 @@ export default function Universe({ current, playing, currentTime, duration, onSe
       }
       // 底鼓给主打击感，镲和军鼓补一层碎拍，低频量和整体音量打底。
       // 高频只占小头：它触发得密，权重给大了画面会一直顶在半高，反而看不出重拍。
-      // 前端的缩放/发光补偿在 CSS 里按屏幕尺寸分档（小屏的同一个数值看着就是「没动静」），
-      // 这里不再重复分端，免得桌面端被压掉一截。
       beatPulse = clamp(
         (hit * 0.54 + hitHigh * 0.18 + bassLevel * 0.2 + trebleLevel * 0.08 + energy * 0.24) * 1.2,
         0, 1
       );
-      // 只在幅度真变了的时候写 CSS 变量：安卓上每帧改自定义属性会触发整棵子树重算样式
-      const quantized = Math.round(beatPulse * 100) / 100;
-      if (quantized !== lastBeatValue) {
-        lastBeatValue = quantized;
-        const beatText = quantized.toFixed(2);
-        if (!lyricsPanel) lyricsPanel = document.getElementById('lyrics-panel');
-        lyricsPanel?.style.setProperty('--beat', beatText);
-      }
 
       // GPU 地形模式：24k 个实例化立方体交给 WebGL，2D 画布只保留上面的 UI 层。
       const gpuAllowed = canUseTerrainGL();
@@ -1133,8 +1121,6 @@ export default function Universe({ current, playing, currentTime, duration, onSe
       stopDesktopVisualListener?.();
       resizeObserver.disconnect();
       layoutObserver.disconnect();
-      // 离开宇宙视图时把节拍值归零，免得停在某一帧的亮度上
-      document.getElementById('lyrics-panel')?.style.setProperty('--beat', '0');
       universe.removeEventListener('pointerdown', startDrag);
       universe.removeEventListener('pointermove', moveDrag);
       universe.removeEventListener('pointerup', endDrag);
