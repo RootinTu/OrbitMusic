@@ -9,11 +9,189 @@
     <meta name="format-detection" content="telephone=no" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="description" content="ORBIT：旋转你的音乐宇宙，聆听 19 首 VALORANT 与英雄联盟完整歌曲。" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/icons/orbit-32.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/orbit-32.png" />
+    <link rel="preload" as="image" href="./icons/orbit-512.png" />
     <title>ORBIT · 音乐漫游</title>
+    <style id="orbit-splash-style">
+      html,body{background:#101113}
+      #orbit-splash{
+        position:fixed;inset:0;z-index:1200;display:grid;place-items:center;
+        overflow:hidden;user-select:none;-webkit-user-select:none;cursor:pointer;
+        background:
+          radial-gradient(ellipse 62% 50% at 50% 46%,rgba(142,164,204,.13) 0%,rgba(24,28,38,.36) 38%,transparent 72%),
+          radial-gradient(circle at 50% 50%,#151821 0%,#101113 62%,#0b0c0f 100%);
+        transition:opacity .52s cubic-bezier(.22,1,.36,1),transform .56s cubic-bezier(.22,1,.36,1),filter .52s ease;
+        will-change:opacity,transform,filter;
+      }
+      #orbit-splash.is-leaving{
+        opacity:0;transform:scale(1.045);filter:blur(7px);pointer-events:none;
+      }
+      #orbit-splash[data-state="waiting"] .orbit-splash-glow,
+      #orbit-splash[data-state="waiting"] .orbit-splash-pulse,
+      #orbit-splash[data-state="waiting"] .orbit-splash-arc-back,
+      #orbit-splash[data-state="waiting"] .orbit-splash-arc-main,
+      #orbit-splash[data-state="waiting"] .orbit-splash-spark,
+      #orbit-splash[data-state="waiting"] .orbit-splash-logo-wrap,
+      #orbit-splash[data-state="waiting"] .orbit-splash-sheen-layer,
+      #orbit-splash[data-state="waiting"] .orbit-splash-wordmark,
+      #orbit-splash[data-state="waiting"] .orbit-splash-sub{
+        animation-play-state:paused!important;
+      }
+      .orbit-splash-stage{
+        position:relative;display:flex;flex-direction:column;align-items:center;
+        justify-content:center;gap:24px;padding:24px;
+      }
+      .orbit-splash-emblem{
+        position:relative;width:210px;height:186px;display:grid;place-items:center;
+      }
+      .orbit-splash-glow{
+        position:absolute;width:196px;height:196px;border-radius:50%;pointer-events:none;
+        background:radial-gradient(circle,rgba(220,232,255,.26) 0%,rgba(146,172,216,.11) 38%,transparent 70%);
+        opacity:0;transform:scale(.5);
+        animation:orbit-splash-glow 1.25s cubic-bezier(.22,1,.36,1) .06s forwards;
+      }
+      .orbit-splash-pulse{
+        position:absolute;width:146px;height:146px;border-radius:36px;pointer-events:none;
+        border:1px solid rgba(226,236,255,.28);opacity:0;transform:scale(.82);
+        animation:orbit-splash-pulse 1.15s cubic-bezier(.16,1,.3,1) .54s forwards;
+      }
+      .orbit-splash-orbit-svg{
+        position:absolute;inset:0;width:100%;height:100%;overflow:visible;
+        pointer-events:none;stroke:none;fill:none;
+      }
+      .orbit-splash-arc-back{
+        fill:none;stroke:rgba(205,220,248,.16);stroke-width:1;
+        opacity:0;animation:orbit-splash-fade .65s ease .14s forwards;
+      }
+      .orbit-splash-arc-main{
+        fill:none;stroke:url(#orbitSplashArcGrad);stroke-width:1.45;stroke-linecap:round;
+        stroke-dasharray:460;stroke-dashoffset:460;
+        animation:orbit-splash-draw 1.08s cubic-bezier(.22,1,.36,1) .16s forwards;
+      }
+      .orbit-splash-spark{
+        fill:#ffffff;stroke:none;opacity:0;
+        filter:drop-shadow(0 0 6px rgba(255,255,255,.95));
+        animation:orbit-splash-spark 1.08s cubic-bezier(.22,1,.36,1) .16s forwards;
+      }
+      .orbit-splash-logo-wrap{
+        position:relative;z-index:2;width:128px;height:128px;border-radius:28.5px;
+        overflow:hidden;opacity:0;transform:scale(.84) translateY(8px);filter:blur(6px);
+        box-shadow:0 22px 48px rgba(0,0,0,.72),0 0 34px rgba(196,214,248,.14);
+        animation:orbit-splash-logo .84s cubic-bezier(.22,1,.36,1) .06s forwards;
+      }
+      .orbit-splash-logo{
+        display:block;width:100%;height:100%;object-fit:contain;
+        -webkit-user-drag:none;pointer-events:none;
+      }
+      .orbit-splash-sheen-layer{
+        position:absolute;inset:-40%;pointer-events:none;
+        background:linear-gradient(112deg,transparent 38%,rgba(255,255,255,.32) 49%,rgba(220,234,255,.14) 54%,transparent 64%);
+        transform:translateX(-115%);opacity:0;
+        animation:orbit-splash-card-sheen .98s cubic-bezier(.22,1,.36,1) .54s forwards;
+      }
+      .orbit-splash-copy{
+        display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center;
+      }
+      .orbit-splash-wordmark{
+        margin:0;padding-left:.28em;font-size:26px;font-weight:600;line-height:1;
+        letter-spacing:.44em;color:#f5f6fa;opacity:0;transform:translateY(8px);
+        background:linear-gradient(110deg,#cfd6e4 15%,#ffffff 48%,#c7d1e2 82%);
+        background-size:220% 100%;background-position:100% 0;
+        -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+        animation:
+          orbit-splash-word .8s cubic-bezier(.22,1,.36,1) .44s forwards,
+          orbit-splash-sheen 1.02s ease-out .58s forwards;
+      }
+      .orbit-splash-sub{
+        margin:0;padding-left:.34em;font-size:10px;letter-spacing:.34em;
+        color:rgba(196,202,214,.62);text-transform:uppercase;
+        opacity:0;transform:translateY(6px);
+        animation:orbit-splash-sub .68s cubic-bezier(.22,1,.36,1) .66s forwards;
+      }
+      @keyframes orbit-splash-fade{to{opacity:1}}
+      @keyframes orbit-splash-draw{to{stroke-dashoffset:0}}
+      @keyframes orbit-splash-logo{
+        0%{opacity:0;transform:scale(.84) translateY(8px);filter:blur(6px)}
+        68%{opacity:1;transform:scale(1.018) translateY(0);filter:blur(0)}
+        100%{opacity:1;transform:scale(1) translateY(0);filter:blur(0)}
+      }
+      @keyframes orbit-splash-glow{
+        0%{opacity:0;transform:scale(.5)}
+        55%{opacity:1;transform:scale(1.06)}
+        100%{opacity:.82;transform:scale(1)}
+      }
+      @keyframes orbit-splash-pulse{
+        0%{opacity:0;transform:scale(.82)}
+        24%{opacity:.68}
+        100%{opacity:0;transform:scale(1.38)}
+      }
+      @keyframes orbit-splash-card-sheen{
+        0%{opacity:0;transform:translateX(-115%)}
+        18%{opacity:1}
+        85%{opacity:.9}
+        100%{opacity:0;transform:translateX(115%)}
+      }
+      @keyframes orbit-splash-spark{
+        0%{opacity:0;transform:scale(.4)}
+        20%{opacity:1;transform:scale(1.15)}
+        82%{opacity:.9;transform:scale(1)}
+        100%{opacity:0;transform:scale(.35)}
+      }
+      @keyframes orbit-splash-word{
+        to{opacity:1;letter-spacing:.28em;transform:translateY(0)}
+      }
+      @keyframes orbit-splash-sheen{
+        to{background-position:0 0}
+      }
+      @keyframes orbit-splash-sub{
+        to{opacity:1;transform:translateY(0)}
+      }
+      @media (prefers-reduced-motion:reduce){
+        #orbit-splash{transition:opacity .2s ease;transform:none!important;filter:none!important}
+        .orbit-splash-glow,.orbit-splash-pulse,.orbit-splash-arc-back,.orbit-splash-arc-main,
+        .orbit-splash-spark,.orbit-splash-logo-wrap,.orbit-splash-sheen-layer,
+        .orbit-splash-wordmark,.orbit-splash-sub{
+          animation:none!important;opacity:1!important;transform:none!important;filter:none!important;stroke-dashoffset:0!important;
+        }
+        .orbit-splash-pulse,.orbit-splash-spark,.orbit-splash-sheen-layer{opacity:0!important}
+        .orbit-splash-wordmark{letter-spacing:.28em}
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="orbit-splash" data-state="waiting" role="presentation" aria-hidden="true" title="点击跳过开屏动画">
+      <div class="orbit-splash-stage">
+        <div class="orbit-splash-emblem">
+          <span class="orbit-splash-glow"></span>
+          <span class="orbit-splash-pulse"></span>
+          <svg class="orbit-splash-orbit-svg" viewBox="0 0 210 186" width="210" height="186">
+            <defs>
+              <linearGradient id="orbitSplashArcGrad" x1="8%" y1="68%" x2="92%" y2="30%">
+                <stop offset="0%" stop-color="#c9daff" stop-opacity=".22" />
+                <stop offset="48%" stop-color="#ffffff" stop-opacity=".86" />
+                <stop offset="100%" stop-color="#9cb5df" stop-opacity=".3" />
+              </linearGradient>
+            </defs>
+            <g transform="rotate(-24 105 93)">
+              <ellipse class="orbit-splash-arc-back" cx="105" cy="93" rx="96" ry="38" />
+              <ellipse class="orbit-splash-arc-main" cx="105" cy="93" rx="96" ry="38" />
+              <circle class="orbit-splash-spark" r="2.5">
+                <animateMotion id="orbit-splash-spark-motion" dur="1.06s" begin="indefinite" fill="freeze" keySplines="0.22 1 0.36 1" calcMode="spline" path="M 201 93 A 96 38 0 1 1 9 93 A 96 38 0 1 1 201 93" />
+              </circle>
+            </g>
+          </svg>
+          <div class="orbit-splash-logo-wrap">
+            <img class="orbit-splash-logo" src="./icons/orbit-512.png" alt="ORBIT Music" width="128" height="128" decoding="sync" />
+            <span class="orbit-splash-sheen-layer"></span>
+          </div>
+        </div>
+        <div class="orbit-splash-copy">
+          <p class="orbit-splash-wordmark">ORBIT</p>
+          <p class="orbit-splash-sub">私人音乐频率 · SOUND UNIVERSE</p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -634,11 +634,17 @@ async function createWindow() {
     if (isAllowedExternalWebUrl(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
-  mainWindow.on('ready-to-show', () => mainWindow?.show());
+  mainWindow.webContents.once('dom-ready', () => revealMainWindow());
+  mainWindow.on('ready-to-show', () => revealMainWindow());
   mainWindow.on('minimize', () => emitVisualActivity(false));
   mainWindow.on('hide', () => emitVisualActivity(false));
   mainWindow.on('restore', () => emitVisualActivity(true));
-  mainWindow.on('show', () => emitVisualActivity(true));
+  mainWindow.on('show', () => {
+    emitVisualActivity(true);
+    if (!mainWindow?.isDestroyed?.() && !mainWindow?.webContents?.isDestroyed?.()) {
+      mainWindow.webContents.send('orbit-window-shown');
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
   await mainWindow.loadURL(appUrl);
   // HTML-in-Canvas can finish loading without emitting ready-to-show while
@@ -777,6 +783,7 @@ async function checkForUpdates() {
 }
 
 handleMainIpc('orbit-app-version', () => ({ version: app.getVersion(), updaterEnabled }));
+handleMainIpc('orbit-is-window-visible', () => Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()));
 handleMainIpc('orbit-check-update', () => checkForUpdates());
 handleMainIpc('orbit-download-update', async () => {
   if (!updaterEnabled) return { ok: false, reason: 'dev' };

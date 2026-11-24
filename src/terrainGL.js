@@ -485,7 +485,7 @@ export function createTerrainGL(canvas, options = {}) {
     premultipliedAlpha: false,
     powerPreference: 'high-performance'
   });
-  if (!gl) return null;
+  if (!gl || gl.isContextLost?.() === true) return null;
 
   const program = gl.createProgram();
   const vertShader = compile(gl, gl.VERTEX_SHADER, VERT);

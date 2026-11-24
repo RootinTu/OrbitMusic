@@ -80,7 +80,7 @@ export default function VisualLab() {
       }
     }
     if (glRef.current) {
-      glRef.current.dispose({ loseContext: true });
+      glRef.current.dispose();
       glRef.current = null;
     }
   }, []);

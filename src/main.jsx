@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
+import { scheduleOrbitSplashDismiss } from './splashScreen.js';
 
 // dvh 兜底：Chrome 108 以下、微信 X5、部分安卓 WebView 不认识 100dvh，
 // 一旦不认识整条 height 声明就被丢掉，页面会塌成 header 那点高度。
@@ -21,3 +22,5 @@ createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>,
 );
+
+scheduleOrbitSplashDismiss();

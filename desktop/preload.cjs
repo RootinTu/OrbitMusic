@@ -38,6 +38,12 @@ contextBridge.exposeInMainWorld('orbitDesktop', {
     ipcRenderer.on('orbit-visual-activity', listener);
     return () => ipcRenderer.removeListener('orbit-visual-activity', listener);
   },
+  isWindowVisible: () => ipcRenderer.invoke('orbit-is-window-visible'),
+  onWindowShown: callback => {
+    const listener = () => callback();
+    ipcRenderer.on('orbit-window-shown', listener);
+    return () => ipcRenderer.removeListener('orbit-window-shown', listener);
+  },
 });
 
 window.addEventListener('DOMContentLoaded', () => {

@@ -71,7 +71,7 @@ export default function Universe({ current, playing, currentTime, duration, onSe
 
   useEffect(() => () => {
     if (glTerrainRef.current) {
-      glTerrainRef.current.dispose({ loseContext: true });
+      glTerrainRef.current.dispose();
       glTerrainRef.current = null;
     }
   }, []);

@@ -58,7 +58,12 @@ vite.on('exit', (code) => { if (!stopping) stop(code ?? 1); });
 
 try {
   await waitForHttp(url);
-  electron = run('npx', ['electron', '.'], { env: { ...sharedAuthEnv, ORBIT_ELECTRON_DEV_URL: url } });
+  const electronEnv = { ...sharedAuthEnv, ORBIT_ELECTRON_DEV_URL: url };
+  delete electronEnv.ELECTRON_RUN_AS_NODE;
+  const customElectronBin = process.env.ORBIT_ELECTRON_BINARY;
+  electron = customElectronBin
+    ? spawn(customElectronBin, ['.'], { stdio: 'inherit', env: electronEnv })
+    : run('npx', ['electron', '.'], { env: electronEnv });
   electron.on('exit', (code) => stop(code ?? 0));
 } catch (error) {
   console.error(error);
