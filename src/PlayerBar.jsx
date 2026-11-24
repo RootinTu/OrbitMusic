@@ -49,27 +49,6 @@ export function Player({
       </button>
     );
   }
-  if (track.provider === 'kugou') return (
-    <footer className="player glass refractive-player">
-      <GlassSurface variant="player" />
-      <div className="now">
-        <LiquidArt src={track.cover} className="now-art" />
-        <div className="now-copy">
-          <div className="now-title">{track.title}</div>
-          <div className="now-sub">{track.artist} · 酷狗官方播放</div>
-        </div>
-      </div>
-      <div className="transport">
-        <button className="icon" onClick={() => onStep(-1)} aria-label="上一首"><Icon name="next" className="flip" /></button>
-        <button className="icon" onClick={onPlay} disabled={preparing} aria-label="在酷狗播放" title="在酷狗播放"><Icon name="play" /></button>
-        <button className="icon" onClick={() => onStep(1)} aria-label="下一首"><Icon name="next" /></button>
-      </div>
-      <div className="player-right">
-        <span>音量与进度请在酷狗窗口调整</span>
-        <button className="icon collapse-btn" onClick={() => onHiddenChange(true)} aria-label="收起播放栏"><Icon name="chevron" /></button>
-      </div>
-    </footer>
-  );
   return (
     <footer className="player glass refractive-player">
       <GlassSurface variant="player" />
@@ -229,7 +208,7 @@ export function DetailDialog({ track, onClose, onPlay }) {
         <span className="eyebrow">TRACK {String(track.id + 1).padStart(2, '0')} / {track.genre}</span>
         <h2>{track.title}</h2><p>{track.note}</p>
         <div className="detail-meta"><span>{track.artist}</span><span>·</span><a href={track.sourceUrl} target="_blank" rel="noreferrer">查看歌曲来源 ↗</a></div>
-        <button className="listen" onClick={() => onPlay(track.id)}>{track.provider === 'kugou' ? '在酷狗播放' : '播放歌曲'} <Icon name="play" /></button>
+        <button className="listen" onClick={() => onPlay(track.id)}>播放歌曲 <Icon name="play" /></button>
         <small>音源、歌词与封面来自本地 assets 目录</small>
       </div>
     </dialog>

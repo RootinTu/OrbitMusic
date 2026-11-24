@@ -62,6 +62,9 @@ test('identifies privileged cookie write routes', () => {
   assert.equal(isPrivilegedApiRoute('/api/qq/login/cookie', 'PUT'), true);
   assert.equal(isPrivilegedApiRoute('/api/qq/login/cookie', 'POST'), true);
   assert.equal(isPrivilegedApiRoute('/api/netease/login/cookie', 'PUT'), true);
+  assert.equal(isPrivilegedApiRoute('/api/kugou/audio/source', 'PUT'), true);
+  assert.equal(isPrivilegedApiRoute('/api/kugou/audio/source', 'DELETE'), true);
+  assert.equal(isPrivilegedApiRoute('/api/kugou/audio', 'GET'), false);
   assert.equal(isPrivilegedApiRoute('/api/qq/login/status', 'GET'), false);
   assert.equal(isPrivilegedApiRoute('/api/netease/logout', 'POST'), false);
 });

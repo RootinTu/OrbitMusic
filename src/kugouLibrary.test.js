@@ -18,6 +18,7 @@ test('stores distinct, deduplicated Kugou playlists and restores the selected on
   assert.equal(switchKugouPlaylist(tracks, 'second').count, 1);
   assert.equal(tracks.length, 2);
   assert.equal(tracks[1].duration, 176);
+  assert.equal(tracks[1].src, `/api/kugou/audio?hash=${songs[0].hash}`);
   assert.equal(playbackTrackKey(tracks[1]), `kugou:${songs[0].hash}`);
   assert.equal(clearKugouTracks(tracks), true);
   assert.equal(tracks.length, 1);

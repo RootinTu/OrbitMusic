@@ -14,8 +14,9 @@ import {
   downloadVerifiedUpdate, verifyInstallerBeforeLaunch,
 } from './update-download.mjs';
 import {
-  KUGOU_HOME, createKugouQrLogin, getKugouSessionStatus, kugouSongPage,
-  listKugouAccountSongs, pollKugouQrLogin, readKugouSessionProfile,
+  KUGOU_HOME, createKugouQrLogin, getKugouSessionStatus, isAllowedKugouAudioUrl,
+  kugouSongPage, listKugouAccountSongs, pollKugouQrLogin, readKugouSessionProfile,
+  resolveKugouAudioUrl,
 } from './kugou-session.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +37,8 @@ const NETEASE_LOGIN_ALLOWED_HOSTS = ['163.com', 'netease.com', '126.net'];
 const KUGOU_LOGIN_PARTITION = 'persist:orbit-music-kugou-login';
 let mainWindow = null;
 let kugouLoginWindow = null;
-let kugouPlayerWindow = null;
+let kugouResolverWindow = null;
+let kugouResolverCleanup = null;
 let kugouPlayerRequest = 0;
 let qqCookieSyncTimer = null;
 let neteaseCookieSyncTimer = null;
@@ -223,13 +225,13 @@ function createLoginWindow(owner, { partition = QQ_LOGIN_PARTITION, title = 'QQ 
   return win;
 }
 
-function kugouWindow(owner, title, login) {
-  const win = createLoginWindow(owner, { partition: KUGOU_LOGIN_PARTITION, title });
-  const permitted = url => isAllowedHostSuffix(url, login ? ['kugou.com', 'qq.com'] : ['kugou.com']);
+function createKugouLoginWindow(owner) {
+  const win = createLoginWindow(owner, { partition: KUGOU_LOGIN_PARTITION, title: '酷狗官网登录 · ORBIT Bridge' });
+  const permitted = url => isAllowedHostSuffix(url, ['kugou.com', 'qq.com']);
   win.webContents.on('will-navigate', (event, url) => { if (!permitted(url)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!permitted(url)) event.preventDefault(); });
   win.webContents.setWindowOpenHandler(({ url }) => {
-    return login && permitted(url) ? {
+    return permitted(url) ? {
       action: 'allow',
       overrideBrowserWindowOptions: { webPreferences: {
         partition: KUGOU_LOGIN_PARTITION, contextIsolation: true, nodeIntegration: false, sandbox: true,
@@ -268,7 +270,7 @@ async function showKugouLogin(owner) {
     revealKugouWindow(kugouLoginWindow);
     return { ok: true };
   }
-  const win = kugouLoginWindow = kugouWindow(owner, '酷狗官网登录 · ORBIT Bridge', true);
+  const win = kugouLoginWindow = createKugouLoginWindow(owner);
   const cookieSession = session.fromPartition(KUGOU_LOGIN_PARTITION);
   let settled = false;
   let checking = false;
@@ -327,41 +329,194 @@ async function showKugouLogin(owner) {
   }
 }
 
-async function showKugouPlayer(owner, hash, albumId, pageId) {
-  const link = kugouSongPage(hash, albumId, pageId);
+function cleanupKugouResolver() {
+  const cleanup = kugouResolverCleanup;
+  kugouResolverCleanup = null;
+  if (typeof cleanup === 'function') {
+    try { cleanup(); } catch { /* ignore cleanup failure */ }
+  }
+  const win = kugouResolverWindow;
+  kugouResolverWindow = null;
+  if (win && !win.isDestroyed()) {
+    try { win.destroy(); } catch { /* ignore destroy failure */ }
+  }
+}
+
+async function syncKugouAudioSourceToBridge(payload) {
+  const response = await fetch(`${appUrl}/api/kugou/audio/source`, {
+    method: 'PUT',
+    headers: localApiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '酷狗音源注册失败');
+  return data;
+}
+
+function clearKugouAudioSourceInBridge() {
+  return fetch(`${appUrl}/api/kugou/audio/source`, {
+    method: 'DELETE',
+    headers: localApiHeaders(),
+  }).catch(() => {});
+}
+
+async function resolveKugouAudioViaHiddenWeb(cookieSession, link, requestId) {
+  cleanupKugouResolver();
+  const win = kugouResolverWindow = new BrowserWindow({
+    width: 960,
+    height: 680,
+    show: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#111111',
+    webPreferences: {
+      partition: KUGOU_LOGIN_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
+      backgroundThrottling: false,
+    },
+  });
+  win.webContents.setAudioMuted(true);
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  const permitted = url => isAllowedHostSuffix(url, ['kugou.com']);
+  win.webContents.on('will-navigate', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+  win.webContents.on('will-redirect', (event, url) => { if (!permitted(url)) event.preventDefault(); });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  const targetWebContentsId = win.webContents.id;
+  const MEDIA_EXT_RE = /\.(?:mp3|m4a|flac|aac|ogg)(?:[?#]|$)/i;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let pollTimer = null;
+    let timeoutTimer = null;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(pollTimer);
+      clearTimeout(timeoutTimer);
+      try { cookieSession.webRequest.onBeforeRequest(null); } catch { /* ignore */ }
+      if (kugouResolverCleanup === teardown) kugouResolverCleanup = null;
+      if (kugouResolverWindow === win) kugouResolverWindow = null;
+      if (!win.isDestroyed()) {
+        try { win.destroy(); } catch { /* ignore */ }
+      }
+      resolve(result);
+    };
+
+    const teardown = () => finish(null);
+    kugouResolverCleanup = teardown;
+
+    cookieSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
+      if (
+        !settled &&
+        details.webContentsId === targetWebContentsId &&
+        MEDIA_EXT_RE.test(details.url) &&
+        isAllowedKugouAudioUrl(details.url)
+      ) {
+        callback({ cancel: true });
+        finish({ url: details.url, backupUrls: [], isFreePart: false, durationMs: 0, source: 'hidden-web' });
+        return;
+      }
+      callback({});
+    });
+
+    pollTimer = setInterval(async () => {
+      if (settled || requestId !== kugouPlayerRequest || win.isDestroyed()) {
+        finish(null);
+        return;
+      }
+      try {
+        const mediaInfo = await win.webContents.executeJavaScript(`(() => {
+          const audio = document.querySelector('audio');
+          if (!audio) return null;
+          const src = audio.currentSrc || audio.src || '';
+          const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+          return { src, duration };
+        })()`, true);
+        if (mediaInfo?.src && isAllowedKugouAudioUrl(mediaInfo.src) && !/\/song\/?$/i.test(mediaInfo.src)) {
+          finish({
+            url: mediaInfo.src,
+            backupUrls: [],
+            isFreePart: mediaInfo.duration > 0 && mediaInfo.duration <= 65,
+            durationMs: mediaInfo.duration > 0 ? Math.round(mediaInfo.duration * 1000) : 0,
+            source: 'hidden-web',
+          });
+        }
+      } catch { /* 页面尚未挂载 audio 元素 */ }
+    }, 280);
+
+    timeoutTimer = setTimeout(() => finish(null), 7500);
+    win.once('closed', () => finish(null));
+    win.loadURL(link).catch(() => {});
+  });
+}
+
+async function resolveKugouPlayback(hash, albumId, pageId, albumAudioId) {
+  const normalizedHash = String(hash || '').trim().toUpperCase();
+  const link = kugouSongPage(normalizedHash, albumId, pageId);
   if (!link) return { ok: false, message: '无效的酷狗歌曲编号' };
   const request = ++kugouPlayerRequest;
-  const account = await readKugouSessionProfile(session.fromPartition(KUGOU_LOGIN_PARTITION));
+  const cookieSession = session.fromPartition(KUGOU_LOGIN_PARTITION);
+
+  const direct = await resolveKugouAudioUrl(cookieSession, {
+    hash: normalizedHash,
+    albumId,
+    albumAudioId,
+    pageId,
+  });
   if (request !== kugouPlayerRequest) return { ok: false, reason: 'superseded' };
-  if (!account.ok) return account;
-  if (!kugouPlayerWindow || kugouPlayerWindow.isDestroyed()) {
-    const win = kugouPlayerWindow = kugouWindow(owner, '酷狗官方播放器', false);
-    win.once('closed', () => { if (kugouPlayerWindow === win) kugouPlayerWindow = null; });
+  if (direct.ok) {
+    await syncKugouAudioSourceToBridge({
+      hash: normalizedHash,
+      url: direct.url,
+      backupUrls: direct.backupUrls,
+      isFreePart: direct.isFreePart,
+      durationMs: direct.durationMs,
+    });
+    return {
+      ok: true,
+      hash: normalizedHash,
+      isFreePart: Boolean(direct.isFreePart),
+      durationMs: Number(direct.durationMs) || 0,
+      source: direct.source,
+    };
   }
-  const win = kugouPlayerWindow;
-  const previousUrl = win.webContents.getURL();
-  if (previousUrl !== link) {
-    try {
-      const sameDoc = Boolean(previousUrl) && isSameDocumentUrl(previousUrl, link);
-      await win.loadURL(link);
-      // 仅 hash 变更时（例如 /song/#hash=...），loadURL 只会触发同文档导航，需强制刷新以确保播放器切歌。
-      if (sameDoc && request === kugouPlayerRequest && !win.isDestroyed()) {
-        await win.webContents.reload();
-      }
-    } catch {
-      if (request !== kugouPlayerRequest || win.isDestroyed()) {
-        return { ok: false, reason: 'superseded' };
-      }
-      throw new Error('无法加载酷狗播放页面');
-    }
+  if (direct.reason === 'login' || !direct.needsWebFallback) return direct;
+
+  // 若直连网关/Web API 暂未拿到音源，静默在隐藏且静音的官方会话页提取真实 CDN 直链，
+  // 绝不弹出酷狗网页窗口与广告。
+  const hidden = await resolveKugouAudioViaHiddenWeb(cookieSession, link, request);
+  if (request !== kugouPlayerRequest) return { ok: false, reason: 'superseded' };
+  if (hidden?.url && isAllowedKugouAudioUrl(hidden.url)) {
+    await syncKugouAudioSourceToBridge({
+      hash: normalizedHash,
+      url: hidden.url,
+      backupUrls: hidden.backupUrls,
+      isFreePart: hidden.isFreePart,
+      durationMs: hidden.durationMs,
+    });
+    return {
+      ok: true,
+      hash: normalizedHash,
+      isFreePart: Boolean(hidden.isFreePart),
+      durationMs: Number(hidden.durationMs) || 0,
+      source: hidden.source,
+    };
   }
-  if (request === kugouPlayerRequest) revealKugouWindow(win);
-  return { ok: true };
+
+  const profile = await readKugouSessionProfile(cookieSession);
+  if (!profile.ok) return { ok: false, reason: 'login' };
+  return { ok: false, reason: 'unavailable', message: '酷狗暂未返回可播放音源，歌曲可能受会员或版权限制' };
 }
 
 function stopKugouPlayer() {
   kugouPlayerRequest++;
-  kugouPlayerWindow?.destroy();
+  cleanupKugouResolver();
   return { ok: true };
 }
 
@@ -673,12 +828,13 @@ handleKugou('qr-create', () => createKugouQrLogin(session.fromPartition(KUGOU_LO
 handleKugou('qr-poll', (_event, key, mid) => pollKugouQrLogin(session.fromPartition(KUGOU_LOGIN_PARTITION), key, mid));
 handleKugou('playlists', () => getKugouSessionStatus(session.fromPartition(KUGOU_LOGIN_PARTITION)));
 handleKugou('songs', (_event, id) => listKugouAccountSongs(session.fromPartition(KUGOU_LOGIN_PARTITION), id));
-handleKugou('play', (event, hash, albumId, pageId) => showKugouPlayer(BrowserWindow.fromWebContents(event.sender), hash, albumId, pageId));
+handleKugou('resolve-audio', (_event, hash, albumId, pageId, albumAudioId) => resolveKugouPlayback(hash, albumId, pageId, albumAudioId));
 handleKugou('stop', stopKugouPlayer);
 handleKugou('logout', async () => {
   kugouLoginWindow?.destroy();
   stopKugouPlayer();
   await session.fromPartition(KUGOU_LOGIN_PARTITION).clearStorageData();
+  await clearKugouAudioSourceInBridge();
   return { ok: true };
 });
 handleMainIpc('orbit-set-keep-awake', (_event, enabled) => {
@@ -841,6 +997,7 @@ if (hasSingleInstanceLock) {
     if (updaterEnabled) checkForUpdates().catch(() => {});
   });
   app.on('window-all-closed', () => {
+    cleanupKugouResolver();
     if (displaySleepBlockerId !== null && powerSaveBlocker.isStarted(displaySleepBlockerId)) powerSaveBlocker.stop(displaySleepBlockerId);
     displaySleepBlockerId = null;
     if (process.platform !== 'darwin') {

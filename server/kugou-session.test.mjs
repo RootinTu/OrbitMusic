@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createKugouQrLogin, getKugouSessionStatus, kugouSongPage, listKugouAccountPlaylists,
-  listKugouAccountSongs, parseKugouCookie, pollKugouQrLogin,
+  createKugouQrLogin, getKugouSessionStatus, isAllowedKugouAudioUrl, kugouSongPage,
+  listKugouAccountPlaylists, listKugouAccountSongs, parseKugouCookie, pollKugouQrLogin,
+  resolveKugouAudioUrl,
 } from '../desktop/kugou-session.mjs';
-import { extractKugouSpecialId } from './kugou-music.mjs';
+import {
+  buildKugouAudioHeaders, clearKugouAudioSourceCache, extractKugouSpecialId,
+  isAllowedKugouAudioUrl as isAllowedServerKugouAudioUrl, putKugouAudioSource,
+} from './kugou-music.mjs';
 
 const hash = '48C685F679FFC7CF08B8A8341CA9DB44';
 const reply = payload => Response.json(payload);
@@ -192,4 +196,130 @@ test('QR client login stores isolated HttpOnly cookies and fetches cloudlist pla
   const songs = await listKugouAccountSongs(cookieSession, 'collection_3_98765432_2_0');
   assert.equal(songs.songs[0].name, '晴天');
   assert.equal(songs.songs[0].artist, '周杰伦');
+});
+
+test('Kugou audio CDN allowlist and proxy headers block untrusted hosts and strip cookies', () => {
+  assert.equal(isAllowedKugouAudioUrl('https://webfs.tx.kugou.com/20261124/demo.mp3'), true);
+  assert.equal(isAllowedKugouAudioUrl('http://fs.ios.kugou.com/demo.mp3'), true);
+  assert.equal(isAllowedServerKugouAudioUrl('https://bssdlbig.kugou.com/a.flac'), true);
+  assert.equal(isAllowedKugouAudioUrl('https://evil.example/a.mp3'), false);
+  assert.equal(isAllowedKugouAudioUrl('https://user:pass@webfs.tx.kugou.com/a.mp3'), false);
+  assert.equal(isAllowedKugouAudioUrl('file:///C:/music.mp3'), false);
+
+  const headers = buildKugouAudioHeaders('bytes=0-1023');
+  assert.equal(headers.Range, 'bytes=0-1023');
+  assert.equal('Cookie' in headers, false);
+  assert.equal('cookie' in headers, false);
+
+  clearKugouAudioSourceCache();
+  assert.equal(putKugouAudioSource({ hash, url: 'https://evil.example/a.mp3' }), null);
+  const saved = putKugouAudioSource({
+    hash,
+    url: 'https://webfs.tx.kugou.com/main.mp3',
+    backupUrls: ['https://evil.example/bad.mp3', 'https://fs.ios.kugou.com/backup.mp3'],
+    isFreePart: true,
+    durationMs: 60000,
+  });
+  assert.deepEqual(saved, {
+    hash,
+    url: 'https://webfs.tx.kugou.com/main.mp3',
+    backupUrls: ['https://fs.ios.kugou.com/backup.mp3'],
+    isFreePart: true,
+    durationMs: 60000,
+  });
+  clearKugouAudioSourceCache();
+});
+
+test('resolveKugouAudioUrl uses gateway /v5/url with client credentials and falls back cleanly', async () => {
+  const seen = [];
+  const cookieSession = {
+    cookies: {
+      get: async filter => {
+        if (filter.name === 'KuGoo') return [];
+        if (filter.url) {
+          return [
+            { name: 'orbit_kg_c1005_uid', value: '98765432' },
+            { name: 'orbit_kg_c1005_token', value: 'client-token-xyz' },
+            { name: 'orbit_kg_c1005_mid', value: '12345678901234567890' },
+          ];
+        }
+        return [];
+      },
+    },
+    fetch: async (input, options) => {
+      const url = new URL(input);
+      seen.push({ pathname: url.pathname, router: options?.headers?.['x-router'], freePart: url.searchParams.get('IsFreePart') });
+      assert.equal(url.origin, 'https://gateway.kugou.com');
+      assert.equal(url.pathname, '/v5/url');
+      assert.equal(options.headers['x-router'], 'trackercdn.kugou.com');
+      assert.match(url.searchParams.get('key') || '', /^[a-f0-9]{32}$/);
+      assert.match(url.searchParams.get('signature') || '', /^[a-f0-9]{32}$/);
+      return reply({
+        status: 1,
+        url: ['https://webfs.tx.kugou.com/full-song.mp3', 'https://evil.example/ignored.mp3'],
+        backupUrl: ['https://fs.ios.kugou.com/full-song-bak.mp3'],
+        timeLength: 277,
+        privilege: 10,
+      });
+    },
+  };
+  const resolved = await resolveKugouAudioUrl(cookieSession, { hash, albumId: '968210', albumAudioId: '32113016' });
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.source, 'gateway-v5');
+  assert.equal(resolved.url, 'https://webfs.tx.kugou.com/full-song.mp3');
+  assert.deepEqual(resolved.backupUrls, ['https://fs.ios.kugou.com/full-song-bak.mp3']);
+  assert.equal(resolved.isFreePart, false);
+  assert.equal(resolved.durationMs, 277000);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].freePart, '0');
+});
+
+test('resolveKugouAudioUrl falls back to web /play/songinfo and signals hidden web fallback when logged in', async () => {
+  const webSession = {
+    cookies: {
+      get: async filter => {
+        if (filter.name === 'KuGoo') {
+          return [{ name: 'KuGoo', value: 'KugooID=12345678&NickName=%u80D6%u6B21&t=web-token-1' }];
+        }
+        return [{ name: 'kg_dfid', value: 'dfid-real-1234' }, { name: 'kg_mid', value: '0123456789abcdef0123456789abcdef' }];
+      },
+    },
+    fetch: async (input) => {
+      const url = new URL(input);
+      if (url.pathname === '/v5/url') return reply({ status: 2, errcode: 20028 });
+      if (url.pathname === '/play/songinfo') {
+        assert.match(url.searchParams.get('signature') || '', /^[a-f0-9]{32}$/);
+        return reply({
+          status: 1,
+          data: {
+            play_url: 'https://webfs.ali.kugou.com/web-song.mp3',
+            play_backup_url: 'https://webfs.tx.kugou.com/web-song-bak.mp3',
+            is_free_part: 0,
+            timelength: 277000,
+          },
+        });
+      }
+      return reply({ status: 0 });
+    },
+  };
+  const webResolved = await resolveKugouAudioUrl(webSession, { hash, albumId: '968210', pageId: 'abc123' });
+  assert.equal(webResolved.ok, true);
+  assert.equal(webResolved.source, 'web-songinfo');
+  assert.equal(webResolved.url, 'https://webfs.ali.kugou.com/web-song.mp3');
+
+  const fallbackSession = {
+    cookies: webSession.cookies,
+    fetch: async () => reply({ status: 0, data: {} }),
+  };
+  const fallback = await resolveKugouAudioUrl(fallbackSession, { hash, albumId: '968210' });
+  assert.equal(fallback.ok, false);
+  assert.equal(fallback.reason, 'unavailable');
+  assert.equal(fallback.needsWebFallback, true);
+
+  const guestSession = {
+    cookies: { get: async () => [] },
+    fetch: async () => reply({ status: 0, data: {} }),
+  };
+  const guest = await resolveKugouAudioUrl(guestSession, { hash });
+  assert.deepEqual(guest, { ok: false, reason: 'login' });
 });

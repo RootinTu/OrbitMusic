@@ -199,7 +199,6 @@ export default function App() {
   const [activePlaylist, setActivePlaylist] = useState(getActivePlaylistId);
   const [neteasePlaylists, setNeteasePlaylists] = useState(listNeteasePlaylists);
   const [kugouPlaylists, setKugouPlaylists] = useState(listKugouPlaylists);
-  const kugouActiveRef = useRef(false);
   const [activeLibrary, setActiveLibrary] = useState(initialActiveLibrary);
   const combinedPlaylists = useMemo(() => [
     ...qqPlaylists.map(item => ({ ...item, id: importedPlaylistKey('qq', item.id), rawId: item.id, provider: 'qq' })),
@@ -278,6 +277,19 @@ export default function App() {
     if (!track?.src) {
       mediaRef.current = null;
       audio.removeAttribute('src');
+    } else if (track.provider === 'kugou' && window.orbitDesktop?.resolveKugouAudio) {
+      // 桌面端酷狗音源需在点播时由主进程按当前登录态解析并注册到本地代理，
+      // 选歌阶段先记录曲目上下文，避免未解析前预拉 /api/kugou/audio 触发 404 误报。
+      const resolvedSrc = new URL(track.src, document.baseURI).href;
+      audio.removeAttribute('src');
+      mediaRef.current = {
+        key: playbackTrackKey(track),
+        playlist,
+        src: resolvedSrc,
+        duration: track.duration,
+        pendingPosition: null,
+        savedAt: 0,
+      };
     } else {
       audio.src = track.src;
       mediaRef.current = {
@@ -569,36 +581,7 @@ export default function App() {
       if (!currentTrack) openBridge();
       return;
     }
-    if (currentTrack.provider === 'kugou') {
-      if (!window.orbitDesktop?.openKugouPlayer) return showToast('请在 ORBIT 桌面版登录酷狗并播放');
-      const request = {};
-      preparingRef.current = request;
-      setPreparing(true);
-      try {
-        const result = await window.orbitDesktop.openKugouPlayer(currentTrack.hash, currentTrack.albumId, currentTrack.pageId);
-        if (preparingRef.current !== request) return;
-        if (result?.ok) {
-          kugouActiveRef.current = true;
-        } else if (result?.reason === 'login') {
-          kugouActiveRef.current = false;
-          showToast('请先登录酷狗账号');
-          openBridge('kugou');
-        } else {
-          kugouActiveRef.current = false;
-          showToast(result?.message || '无法打开酷狗官方播放器');
-        }
-      } catch {
-        if (preparingRef.current === request) {
-          kugouActiveRef.current = false;
-          showToast('无法打开酷狗官方播放器');
-        }
-      } finally {
-        if (preparingRef.current === request) cancelPlaybackPreparation();
-      }
-      return;
-    }
     if (!media) return;
-    kugouActiveRef.current = false;
     window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     const request = {};
     const isCurrent = () => preparingRef.current === request && mediaRef.current === media;
@@ -634,6 +617,36 @@ export default function App() {
         }
         if (auth.profile) updateNeteaseAccount(auth.profile);
         reloadTrackAudio(audioRef.current, media);
+      }
+      if (currentTrack.provider === 'kugou' && window.orbitDesktop?.resolveKugouAudio) {
+        const audioEl = audioRef.current;
+        const alreadyLoaded = audioEl.currentSrc === media.src && audioEl.readyState >= 2 && !audioEl.error;
+        if (!alreadyLoaded) {
+          const resolved = await window.orbitDesktop.resolveKugouAudio(
+            currentTrack.hash,
+            currentTrack.albumId,
+            currentTrack.pageId,
+            currentTrack.albumAudioId,
+          );
+          if (!isCurrent()) return;
+          if (!resolved?.ok) {
+            if (resolved?.reason === 'login') {
+              showToast('请先登录酷狗账号');
+              openBridge('kugou');
+            } else if (resolved?.reason !== 'superseded') {
+              showToast(resolved?.message || '酷狗暂未返回可播放音源（可能受会员或版权限制）');
+            }
+            return;
+          }
+          if (resolved.durationMs > 0 && (!media.duration || resolved.isFreePart)) {
+            media.duration = resolved.durationMs / 1000;
+            setDuration(media.duration);
+          }
+          if (resolved.isFreePart) {
+            showToast('只拿到试听片段 · 完整播放需要酷狗对应会员权限');
+          }
+          reloadTrackAudio(audioEl, media, currentTrack.src);
+        }
       }
       if (currentTrack.provider === 'qq' || currentTrack.provider === 'netease') {
         // Login/permission refresh can expose word lyrics that the pre-login
@@ -748,7 +761,6 @@ export default function App() {
     setJournal(false);
     setSelected(null);
     cancelPlaybackPreparation();
-    kugouActiveRef.current = false;
     window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     audioRef.current.pause();
     setPlaying(false);
@@ -852,7 +864,6 @@ export default function App() {
 
   const handleKugouClear = useCallback(() => {
     if (!clearKugouTracks(tracks)) return showToast('无法清空酷狗导入曲库');
-    kugouActiveRef.current = false;
     window.orbitDesktop?.stopKugouPlayer?.().catch(() => {});
     clearProviderPlayback('kugou');
     if (activeLibrary?.startsWith('kugou:')) {
@@ -868,8 +879,7 @@ export default function App() {
   const step = direction => {
     if (!tracks.length) return;
     const next = random ? (current + 1 + Math.floor(Math.random() * (tracks.length - 1))) % tracks.length : current + direction;
-    const shouldPlay = tracks[current]?.provider === 'kugou' ? kugouActiveRef.current : !audioRef.current.paused;
-    selectTrack(next, shouldPlay);
+    selectTrack(next, !audioRef.current.paused);
   };
 
   const track = tracks[current];
@@ -949,7 +959,7 @@ export default function App() {
       )}</GlassBackdrop>
       {!journal && (
         <div className="universe-footer">
-          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> {track?.provider === 'kugou' ? '点击在酷狗播放' : '点击即播'}</div>
+          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
           <div className="view-controls glass liquid-control">
             <GlassSurface variant="control" />
             <button onClick={() => {
@@ -1077,7 +1087,7 @@ export default function App() {
           if (!tracks.length) return;
           const next = tracks[(currentRef.current + 1) % tracks.length];
           prefetchLrc(next.lyrics);
-          prefetchAudio(next.src);
+          if (next.provider !== 'kugou') prefetchAudio(next.src);
         }}
         onEnded={event => {
           const audio = event.currentTarget;
@@ -1112,6 +1122,14 @@ export default function App() {
               .then(response => response.json().catch(() => ({})))
               .then(payload => showToast(payload.message || payload.error || '网易云没有返回可播放地址'))
               .catch(() => showToast('网易云没有返回可播放地址'));
+            return;
+          }
+          if (track?.provider === 'kugou') {
+            if (!audioRef.current?.currentSrc || preparingRef.current) return;
+            fetch(track.src, { cache: 'no-store' })
+              .then(response => response.json().catch(() => ({})))
+              .then(payload => showToast(payload.message || payload.error || '酷狗音乐暂无法播放这首歌'))
+              .catch(() => showToast('酷狗音乐暂无法播放这首歌'));
             return;
           }
           if (!track?.src) return;

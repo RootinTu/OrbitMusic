@@ -85,9 +85,9 @@ export function switchKugouPlaylist(library, id) {
       cover: proxyKugouCover(song.cover),
       id: library.length, title: song.name, artist: song.artist || '酷狗音乐', provider: 'kugou',
       duration: durationMs / 1000, genre: 'KUGOU MUSIC',
-      src: '',
+      src: `/api/kugou/audio?hash=${song.hash}`,
       lyrics: `/api/kugou/lyric?hash=${song.hash}&duration=${durationMs}`,
-      note: '从酷狗音乐导入。使用当前登录账号在酷狗官方播放窗口收听。',
+      note: '从酷狗音乐导入。在 ORBIT 内通过本地音频流代理原生播放。',
     });
   }
   return { id, count: playlist.songs.length };

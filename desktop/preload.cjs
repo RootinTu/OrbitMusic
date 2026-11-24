@@ -14,7 +14,7 @@ contextBridge.exposeInMainWorld('orbitDesktop', {
   pollKugouQr: (key, mid) => ipcRenderer.invoke('orbit-kugou-qr-poll', key, mid),
   listKugouPlaylists: () => ipcRenderer.invoke('orbit-kugou-playlists'),
   listKugouSongs: id => ipcRenderer.invoke('orbit-kugou-songs', id),
-  openKugouPlayer: (hash, albumId, pageId) => ipcRenderer.invoke('orbit-kugou-play', hash, albumId, pageId),
+  resolveKugouAudio: (hash, albumId, pageId, albumAudioId) => ipcRenderer.invoke('orbit-kugou-resolve-audio', hash, albumId, pageId, albumAudioId),
   stopKugouPlayer: () => ipcRenderer.invoke('orbit-kugou-stop'),
   clearKugouLogin: () => ipcRenderer.invoke('orbit-kugou-logout'),
   onKugouAuth: callback => {

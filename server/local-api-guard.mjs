@@ -6,6 +6,7 @@ export const API_TOKEN_HEADER = 'x-orbit-token';
 const PRIVILEGED_COOKIE_ROUTES = new Set([
   '/api/qq/login/cookie',
   '/api/netease/login/cookie',
+  '/api/kugou/audio/source',
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PAGE_PATHS = new Set(['/', '/index.html', '/visual-lab.html']);
