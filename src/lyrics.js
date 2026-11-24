@@ -1,3 +1,5 @@
+import { setBoundedMapEntry } from './boundedCache.js';
+
 // Keep provider text and timing together; never estimate timing from text length.
 const TIME_TAGS = /^(?:\[\d{1,3}:[0-5]\d(?:[.:]\d{1,3})?\])+/;
 const TIME_TAG = /\[(\d{1,3}):([0-5]\d)(?:[.:](\d{1,3}))?\]/g;
@@ -171,13 +173,17 @@ export function findLrcIndex(rows, time) {
 }
 
 const cache = new Map();
+const MAX_LRC_CACHE_ENTRIES = 120;
 export function invalidateLrc(url) {
   cache.delete(url);
 }
 export function ensureLrc(url) {
   if (!url) return Promise.resolve({ rows: [], meta: {} });
   const existing = cache.get(url);
-  if (existing) return existing;
+  if (existing) {
+    setBoundedMapEntry(cache, url, existing, MAX_LRC_CACHE_ENTRIES);
+    return existing;
+  }
   const request = fetch(url, { cache: 'no-store' })
     .then(async response => {
       if (!response.ok) throw new Error(`Lyrics ${response.status}`);
@@ -189,7 +195,7 @@ export function ensureLrc(url) {
       if (cache.get(url) === request) cache.delete(url);
       throw error;
     });
-  cache.set(url, request);
+  setBoundedMapEntry(cache, url, request, MAX_LRC_CACHE_ENTRIES);
   return request;
 }
 

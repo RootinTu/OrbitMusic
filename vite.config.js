@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { createLocalApiGuard } from './server/local-api-guard.mjs';
 import { registerQQMusicViteMiddlewares } from './server/qq-music.mjs';
 import express from 'express';
 import { registerNeteaseMusicExpressRoutes } from './server/netease-music.mjs';
@@ -17,8 +18,10 @@ function musicBridge() {
   return {
     name: 'orbit-music-bridge',
     configureServer(server) {
+      server.middlewares.use(createLocalApiGuard());
       registerQQMusicViteMiddlewares(server, writeJson);
       const bridge = express();
+      bridge.disable('x-powered-by');
       bridge.use(express.json({ limit: '256kb' }));
       registerNeteaseMusicExpressRoutes(bridge);
       registerKugouMusicExpressRoutes(bridge);

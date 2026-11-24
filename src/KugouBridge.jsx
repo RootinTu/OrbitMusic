@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar from './MusicAccountAvatar.jsx';
+import { isAbortError } from './asyncSlot.js';
 import { MAX_KUGOU_PLAYLISTS, MAX_KUGOU_TRACKS } from './kugouLibrary.js';
 
 const importErrors = {
@@ -39,6 +40,7 @@ export default function KugouBridge({
   const [notice, setNotice] = useState('');
   const [confirmClear, setConfirmClear] = useState(false);
   const pending = useRef(null);
+  const abortRef = useRef(null);
   const qrTimerRef = useRef(null);
   const loggedIn = Boolean(profile);
   const loggedInRef = useRef(false);
@@ -60,15 +62,18 @@ export default function KugouBridge({
     setCollectionError(result.collectionError || '');
   }, []);
 
-  const run = useCallback(async (action, request, onSuccess, { silentLogin = false } = {}) => {
-    if (pending.current) return;
+  const run = useCallback(async (action, request, onSuccess, { silentLogin = false, supersede = false } = {}) => {
+    if (pending.current && !supersede) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     const token = {};
     pending.current = token;
     setBusy(action);
     setNotice('');
     try {
-      const result = await request();
-      if (pending.current !== token) return;
+      const result = await request(controller.signal);
+      if (pending.current !== token || controller.signal.aborted) return;
       if (result?.ok) onSuccess(result);
       else if (result?.reason === 'login') {
         setProfile(null);
@@ -78,11 +83,12 @@ export default function KugouBridge({
         setPreview(null);
         if (!silentLogin) setNotice('尚未检测到酷狗登录态，请先扫码登录。');
       } else setNotice(result?.message || result?.error || '酷狗请求未完成');
-    } catch {
-      if (pending.current === token) setNotice('暂时无法连接酷狗服务，请稍后再试。');
+    } catch (error) {
+      if (pending.current === token && !isAbortError(error)) setNotice('暂时无法连接酷狗服务，请稍后再试。');
     } finally {
       if (pending.current === token) {
         pending.current = null;
+        if (abortRef.current === controller) abortRef.current = null;
         setBusy('');
       }
     }
@@ -120,6 +126,8 @@ export default function KugouBridge({
       window.removeEventListener('focus', onFocus);
       unsubscribeAuth?.();
       stopQrPolling();
+      abortRef.current?.abort();
+      abortRef.current = null;
       pending.current = null;
       setBusy('');
       setNotice('');
@@ -178,15 +186,15 @@ export default function KugouBridge({
     event.preventDefault();
     const clean = songQuery.trim();
     if (!clean) return;
-    run('search', async () => {
-      const response = await fetch(`/api/kugou/search?${new URLSearchParams({ q: clean, type: 'song' })}`);
+    run('search', async signal => {
+      const response = await fetch(`/api/kugou/search?${new URLSearchParams({ q: clean, type: 'song' })}`, { signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) return { ok: false, message: payload.error || '搜索酷狗歌曲失败' };
       return payload;
     }, result => {
       setSongResults(result.songs || []);
       if (!result.songs?.length) setNotice('没有搜到匹配的酷狗歌曲。');
-    });
+    }, { supersede: true });
   }
 
   function importLooseSong(song) {
@@ -196,21 +204,21 @@ export default function KugouBridge({
 
   function inspectAccountPlaylist(id) {
     setPreview(null);
-    run(`playlist:${id}`, () => api.listKugouSongs(id), result => openPreview({ ...result, id: `account:${result.id}` }));
+    run(`playlist:${id}`, () => api.listKugouSongs(id), result => openPreview({ ...result, id: `account:${result.id}` }), { supersede: true });
   }
 
   function inspectPublicPlaylist(input, name = '') {
     const clean = String(input || '').trim();
     if (!clean) { setNotice('请输入酷狗歌单链接、数字 ID 或歌单关键词。'); return; }
     setPreview(null);
-    run(`playlist:${clean}`, async () => {
+    run(`playlist:${clean}`, async signal => {
       const params = new URLSearchParams({ input: clean });
       if (name) params.set('name', name);
-      const response = await fetch(`/api/kugou/playlist?${params}`);
+      const response = await fetch(`/api/kugou/playlist?${params}`, { signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) return { ok: false, message: payload.error || '无法读取该酷狗歌单' };
       return payload;
-    }, openPreview);
+    }, openPreview, { supersede: true });
   }
 
   function handlePlaylistInputSubmit(event) {
@@ -221,8 +229,8 @@ export default function KugouBridge({
       inspectPublicPlaylist(clean);
       return;
     }
-    run('search-playlist', async () => {
-      const response = await fetch(`/api/kugou/search?${new URLSearchParams({ q: clean, type: 'playlist' })}`);
+    run('search-playlist', async signal => {
+      const response = await fetch(`/api/kugou/search?${new URLSearchParams({ q: clean, type: 'playlist' })}`, { signal });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) return { ok: false, message: payload.error || '搜索酷狗歌单失败' };
       return payload;
@@ -230,7 +238,7 @@ export default function KugouBridge({
       const list = result.playlists || [];
       setSearchPlaylists(list);
       if (!list.length) setNotice('没有搜到匹配的酷狗公开歌单。');
-    });
+    }, { supersede: true });
   }
 
   function toggle(hash) {

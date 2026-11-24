@@ -23,6 +23,7 @@ import { BeatEngine } from './beatEngine.js';
 import { OUTPUT_MODES, applySink, listOutputs, readBeatOffset, readOutputPref, requestDeviceLabels, saveBeatOffset, saveOutputPref } from './audioOut.js';
 import { clearProviderPlayback, forgetPlaylistPlayback, playbackTrackKey, readLastTrack, resumeAt, saveLastTrack, saveProgress } from './playbackMemory.js';
 import { createTerrainGL } from './terrainGL.js';
+import { createAudioPrefetcher } from './boundedCache.js';
 import { fitCardSphere, projectCardY } from './sphereLayout.js';
 
 const IS_DESKTOP_APP = Boolean(window.orbitDesktop?.isDesktop)
@@ -118,15 +119,32 @@ function waitUntilPlayable(audio, timeout = 8000) {
   });
 }
 
-// 提前把下一首的音频拉进浏览器缓存，切歌时不用从头下
-const audioPrefetch = new Map();
+// 提前把下一首的音频拉进浏览器缓存，切歌时不用从头下；限制容量避免长时间播放内存膨胀
+const audioPrefetcher = createAudioPrefetcher({ maxEntries: 3 });
 function prefetchAudio(src) {
-  if (!src || audioPrefetch.has(src)) return;
-  const probe = new Audio();
-  probe.preload = 'auto';
-  probe.src = src;
-  probe.load();
-  audioPrefetch.set(src, probe);
+  audioPrefetcher.prefetch(src);
+}
+
+function disposeAudioAnalysis(analysis) {
+  if (!analysis) return;
+  try { analysis.engine?.dispose?.(); } catch { /* ignore */ }
+  try { analysis.source?.disconnect?.(); } catch { /* ignore */ }
+  try { analysis.analyser?.disconnect?.(); } catch { /* ignore */ }
+  try { analysis.fine?.disconnect?.(); } catch { /* ignore */ }
+  const context = analysis.context;
+  if (context && context.state !== 'closed') {
+    context.close?.().catch?.(() => {});
+  }
+  analysis.context = null;
+  analysis.analyser = null;
+  analysis.source = null;
+  analysis.fine = null;
+  analysis.fineBins = null;
+  analysis.spectrum = null;
+  analysis.engine = null;
+  if (import.meta.env.DEV && typeof window !== 'undefined' && window.__orbitBeat) {
+    delete window.__orbitBeat;
+  }
 }
 
 function formatTime(seconds) {
@@ -661,7 +679,7 @@ function Universe({ current, playing, currentTime, duration, onSelect, zoom, bac
 
   useEffect(() => () => {
     if (glTerrainRef.current) {
-      glTerrainRef.current.dispose();
+      glTerrainRef.current.dispose({ loseContext: true });
       glTerrainRef.current = null;
     }
   }, []);
@@ -2242,6 +2260,12 @@ export default function App() {
     };
   }, []);
 
+  // 应用卸载时释放 Web Audio 上下文与预加载音频探测实例
+  useEffect(() => () => {
+    disposeAudioAnalysis(analysisRef.current);
+    audioPrefetcher.clear();
+  }, []);
+
   // 播放期间保持屏幕常亮：桌面应用走 Electron 的系统级阻止息屏，
   // 浏览器和安卓车机走 Screen Wake Lock，并在页面重新可见时自动补领。
   useEffect(() => {
@@ -2390,13 +2414,8 @@ export default function App() {
       } catch {
         // 部分移动端内核（老 WebView / WeChat X5）createMediaElementSource 会抛异常，
         // 之前这里直接把 startPlayback 一起 catch 掉了，表现是根本不出声。
-        // 现在兜底：标记失败并退回原生输出，律动没了但声音必须正常。
-        analysis.engine?.dispose();
-        analysis.context = null;
-        analysis.analyser = null;
-        analysis.source = null;
-        analysis.fine = null;
-        analysis.engine = null;
+        // 现在兜底：完整释放已创建的节点与 AudioContext，标记失败并退回原生输出。
+        disposeAudioAnalysis(analysis);
         analysis.takeoverFailed = true;
         setOutputPref(previous => (previous.mode === 'direct' ? previous : { ...previous, mode: 'direct' }));
         showToast('当前浏览器不支持律动接管，已用原生输出播放');

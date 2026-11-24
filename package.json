@@ -1,7 +1,7 @@
 {
   "name": "orbit-music",
   "private": true,
-  "version": "2.1.8",
+  "version": "2.1.9",
   "description": "ORBIT liquid-glass music universe with QQ Music, Netease Cloud Music and Kugou Music bridges",
   "author": "ORBIT Music",
   "type": "module",
@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.1.1",
-    "electron": "^42.5.0",
+    "electron": "^42.11.18",
     "electron-builder": "^26.15.3",
     "vite": "^8.3.0"
   },
@@ -40,8 +40,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "hb1234567898",
-        "repo": "aimusic"
+        "owner": "RootinTu",
+        "repo": "OrbitMusic"
       }
     ],
     "files": [

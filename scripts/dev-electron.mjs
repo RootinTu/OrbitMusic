@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 
@@ -36,7 +37,12 @@ function waitForHttp(url, timeout = 30000) {
 
 const port = await findPort(preferredPort);
 const url = `http://127.0.0.1:${port}`;
-const vite = run('npx', ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort']);
+const sharedAuthEnv = {
+  ...process.env,
+  ORBIT_LOCAL_API_TOKEN: process.env.ORBIT_LOCAL_API_TOKEN || crypto.randomBytes(32).toString('hex'),
+  ORBIT_LOCAL_SESSION_TOKEN: process.env.ORBIT_LOCAL_SESSION_TOKEN || crypto.randomBytes(32).toString('hex'),
+};
+const vite = run('npx', ['vite', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { env: sharedAuthEnv });
 let electron = null;
 let stopping = false;
 const stop = (code = 0) => {
@@ -52,7 +58,7 @@ vite.on('exit', (code) => { if (!stopping) stop(code ?? 1); });
 
 try {
   await waitForHttp(url);
-  electron = run('npx', ['electron', '.'], { env: { ...process.env, ORBIT_ELECTRON_DEV_URL: url } });
+  electron = run('npx', ['electron', '.'], { env: { ...sharedAuthEnv, ORBIT_ELECTRON_DEV_URL: url } });
   electron.on('exit', (code) => stop(code ?? 0));
 } catch (error) {
   console.error(error);

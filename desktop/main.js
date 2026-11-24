@@ -1,9 +1,14 @@
 // QQ Music and Netease Cloud Music login handling is adapted from Sonic Topography for local,
 // personal non-commercial use. See THIRD_PARTY_NOTICES.md.
 import { app, BrowserWindow, ipcMain, powerSaveBlocker, session, shell } from 'electron';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  createTrustedIpcRegistrar, isAllowedExternalWebUrl, isAllowedHostSuffix,
+  isAllowedMainNavigationUrl, isAllowedMainWindowPermission,
+} from './ipc-guard.mjs';
 import {
   checkForVerifiedUpdate, createVersionedTaskQueue,
   downloadVerifiedUpdate, verifyInstallerBeforeLaunch,
@@ -16,11 +21,18 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(__dirname, '..');
 const isDev = Boolean(process.env.ORBIT_ELECTRON_DEV_URL);
-const appUrl = process.env.ORBIT_ELECTRON_DEV_URL || `http://127.0.0.1:${process.env.PORT || '45437'}`;
+let appUrl = process.env.ORBIT_ELECTRON_DEV_URL || `http://127.0.0.1:${process.env.PORT || '45437'}`;
+let appOrigin = new URL(appUrl).origin;
+let localServerInstance = null;
+let localServerPromise = null;
+const localApiToken = process.env.ORBIT_LOCAL_API_TOKEN || crypto.randomBytes(32).toString('hex');
+const localSessionToken = process.env.ORBIT_LOCAL_SESSION_TOKEN || crypto.randomBytes(32).toString('hex');
 const QQ_LOGIN_PARTITION = 'persist:orbit-music-qq-login';
 const QQ_LOGIN_URL = 'https://y.qq.com/n/ryqq/profile';
+const QQ_LOGIN_ALLOWED_HOSTS = ['qq.com', 'gtimg.cn', 'wechat.com'];
 const NETEASE_LOGIN_PARTITION = 'persist:orbit-music-netease-login';
 const NETEASE_LOGIN_URL = 'https://music.163.com/#/login';
+const NETEASE_LOGIN_ALLOWED_HOSTS = ['163.com', 'netease.com', '126.net'];
 const KUGOU_LOGIN_PARTITION = 'persist:orbit-music-kugou-login';
 let mainWindow = null;
 let kugouLoginWindow = null;
@@ -125,10 +137,14 @@ function hasNeteaseLogin(cookieText) {
   return Boolean(parseCookieHeader(cookieText).MUSIC_U);
 }
 
+function localApiHeaders(extra = {}) {
+  return { 'X-Orbit-Token': localApiToken, ...extra };
+}
+
 async function syncCookieToBridge(cookie) {
   const response = await fetch(`${appUrl}/api/qq/login/cookie`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: localApiHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ cookie }),
   });
   const payload = await response.json().catch(() => ({}));
@@ -146,7 +162,7 @@ async function syncCurrentQQPlaybackCookie() {
 
 async function syncNeteaseCookieToBridge(cookie) {
   const response = await fetch(`${appUrl}/api/netease/login/cookie`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cookie }),
+    method: 'PUT', headers: localApiHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ cookie }),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.message || payload.error || '网易云登录信息同步失败');
@@ -183,7 +199,7 @@ function watchNeteaseCookies() {
 }
 
 function createLoginWindow(owner, { partition = QQ_LOGIN_PARTITION, title = 'QQ 音乐登录 · ORBIT Bridge' } = {}) {
-  return new BrowserWindow({
+  const win = new BrowserWindow({
     width: 900,
     height: 720,
     minWidth: 760,
@@ -198,20 +214,18 @@ function createLoginWindow(owner, { partition = QQ_LOGIN_PARTITION, title = 'QQ 
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
     },
   });
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  return win;
 }
 
 function kugouWindow(owner, title, login) {
   const win = createLoginWindow(owner, { partition: KUGOU_LOGIN_PARTITION, title });
-  win.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  function permitted(url) {
-    try {
-      const { protocol, hostname, username, password } = new URL(url);
-      return protocol === 'https:' && !username && !password &&
-        (/(?:^|\.)kugou\.com$/.test(hostname) || (login && /(?:^|\.)qq\.com$/.test(hostname)));
-    } catch { return false; }
-  }
+  const permitted = url => isAllowedHostSuffix(url, login ? ['kugou.com', 'qq.com'] : ['kugou.com']);
   win.webContents.on('will-navigate', (event, url) => { if (!permitted(url)) event.preventDefault(); });
   win.webContents.on('will-redirect', (event, url) => { if (!permitted(url)) event.preventDefault(); });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -393,9 +407,16 @@ async function openQQMusicLoginWindow(owner) {
       } catch { /* 下一轮轮询继续检查 */ }
     };
 
+    const isAllowedQQUrl = url => isAllowedHostSuffix(url, QQ_LOGIN_ALLOWED_HOSTS);
+    loginWindow.webContents.on('will-navigate', (event, url) => {
+      if (!isAllowedQQUrl(url)) event.preventDefault();
+    });
+    loginWindow.webContents.on('will-redirect', (event, url) => {
+      if (!isAllowedQQUrl(url)) event.preventDefault();
+    });
     loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\/([^/]+\.)?qq\.com/i.test(url)) loginWindow.loadURL(url).catch(() => {});
-      else if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+      if (isAllowedQQUrl(url)) loginWindow.loadURL(url).catch(() => {});
+      else if (isAllowedExternalWebUrl(url)) shell.openExternal(url).catch(() => {});
       return { action: 'deny' };
     });
     loginWindow.webContents.on('did-finish-load', checkCookies);
@@ -461,9 +482,16 @@ async function openNeteaseLoginWindow(owner) {
       }, 450);
     })()`, true).catch(() => {});
 
+    const isAllowedNeteaseUrl = url => isAllowedHostSuffix(url, NETEASE_LOGIN_ALLOWED_HOSTS);
+    loginWindow.webContents.on('will-navigate', (event, url) => {
+      if (!isAllowedNeteaseUrl(url)) event.preventDefault();
+    });
+    loginWindow.webContents.on('will-redirect', (event, url) => {
+      if (!isAllowedNeteaseUrl(url)) event.preventDefault();
+    });
     loginWindow.webContents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\/([^/]+\.)?163\.com/i.test(url)) loginWindow.loadURL(url).catch(() => {});
-      else if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+      if (isAllowedNeteaseUrl(url)) loginWindow.loadURL(url).catch(() => {});
+      else if (isAllowedExternalWebUrl(url)) shell.openExternal(url).catch(() => {});
       return { action: 'deny' };
     });
     loginWindow.webContents.on('did-finish-load', () => {
@@ -500,12 +528,38 @@ function waitForHttp(url, timeoutMs = 12000) {
   });
 }
 
-async function createWindow() {
-  if (!isDev) {
-    process.env.PORT = process.env.PORT || '45437';
-    await import(pathToFileURL(path.join(appRoot, 'local-server.mjs')).href);
-    await waitForHttp(appUrl);
+async function ensureLocalServerStarted() {
+  if (isDev) return appUrl;
+  if (localServerInstance) return localServerInstance.url;
+  if (!localServerPromise) {
+    localServerPromise = (async () => {
+      process.env.ORBIT_LOCAL_API_TOKEN = localApiToken;
+      process.env.ORBIT_LOCAL_SESSION_TOKEN = localSessionToken;
+      const { startLocalServer } = await import(pathToFileURL(path.join(appRoot, 'local-server.mjs')).href);
+      const started = await startLocalServer({
+        port: Number(process.env.PORT || '45437'),
+        guardOptions: {
+          apiToken: localApiToken,
+          sessionToken: localSessionToken,
+          issueSessionCookie: false,
+        },
+      });
+      localServerInstance = started;
+      appUrl = started.url;
+      appOrigin = new URL(started.url).origin;
+      process.env.PORT = String(started.port);
+      await waitForHttp(appUrl);
+      return started.url;
+    })().catch((error) => {
+      localServerPromise = null;
+      throw error;
+    });
   }
+  return localServerPromise;
+}
+
+async function createWindow() {
+  await ensureLocalServerStarted();
   // 桌面会话会持久化；应用重启后自动把登录态重新交给本地代理，
   // 用户不需要每次打开都重新扫码。
   try {
@@ -534,7 +588,9 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: false,
       // 允许 Chromium 在最小化/隐藏后暂停 rAF、CSS 动画和普通计时器。
       // audio 元素与 AudioWorklet 仍继续出声，恢复窗口后视觉循环会自动续上。
       backgroundThrottling: true,
@@ -552,14 +608,30 @@ async function createWindow() {
       relaunchDisplayName: 'ORBIT Music',
     });
   }
+  // 将本地会话凭据直接注入 Electron 主窗口 session（HttpOnly + SameSite=Strict），
+  // 外部浏览器或其他本机进程无法从 HTTP 页面获取该 Cookie。
+  await mainWindow.webContents.session.cookies.set({
+    url: appUrl,
+    name: 'orbit_session',
+    value: localSessionToken,
+    path: '/',
+    httpOnly: true,
+    sameSite: 'strict',
+  });
+  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    if (webContents !== mainWindow?.webContents) return callback(false);
+    callback(isAllowedMainWindowPermission(permission, details, appOrigin));
+  });
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedMainNavigationUrl(url, appOrigin)) event.preventDefault();
+  });
+  mainWindow.webContents.on('will-redirect', (event, url) => {
+    if (!isAllowedMainNavigationUrl(url, appOrigin)) event.preventDefault();
+  });
   // Song source links open outside the app, without its desktop preload.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const address = new URL(url);
-      if (['http:', 'https:'].includes(address.protocol) && !address.username && !address.password) {
-        shell.openExternal(address.href).catch(() => {});
-      }
-    } catch { /* not an external web URL */ }
+    if (isAllowedExternalWebUrl(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
   mainWindow.on('ready-to-show', () => mainWindow?.show());
@@ -574,17 +646,20 @@ async function createWindow() {
   revealMainWindow();
 }
 
-ipcMain.handle('orbit-open-qq-login', (event) => openQQMusicLoginWindow(BrowserWindow.fromWebContents(event.sender)));
-ipcMain.handle('orbit-refresh-qq-login', () => syncCurrentQQPlaybackCookie());
-ipcMain.handle('orbit-open-netease-login', event => openNeteaseLoginWindow(BrowserWindow.fromWebContents(event.sender)));
-ipcMain.handle('orbit-refresh-netease-login', () => syncCurrentNeteaseCookie());
+const handleMainIpc = createTrustedIpcRegistrar({
+  ipcMain,
+  getMainWebContents: () => mainWindow?.webContents,
+  getAppOrigin: () => appOrigin,
+});
+
+handleMainIpc('orbit-open-qq-login', (event) => openQQMusicLoginWindow(BrowserWindow.fromWebContents(event.sender)));
+handleMainIpc('orbit-refresh-qq-login', () => syncCurrentQQPlaybackCookie());
+handleMainIpc('orbit-open-netease-login', event => openNeteaseLoginWindow(BrowserWindow.fromWebContents(event.sender)));
+handleMainIpc('orbit-refresh-netease-login', () => syncCurrentNeteaseCookie());
 function handleKugou(channel, fn) {
-  ipcMain.handle(`orbit-kugou-${channel}`, async (event, ...args) => {
-    const frameUrl = event.senderFrame?.url;
-    if (event.sender !== mainWindow?.webContents || event.senderFrame !== event.sender.mainFrame ||
-        !frameUrl || new URL(frameUrl).origin !== new URL(appUrl).origin) return { ok: false };
-    try { return await fn(event, ...args); }
-    catch (error) { return { ok: false, message: error?.message || '酷狗请求未完成，请检查网络或在官网确认登录状态。' }; }
+  handleMainIpc(`orbit-kugou-${channel}`, fn, {
+    onUnauthorized: () => ({ ok: false }),
+    onError: error => ({ ok: false, message: error?.message || '酷狗请求未完成，请检查网络或在官网确认登录状态。' }),
   });
 }
 handleKugou('login', event => showKugouLogin(BrowserWindow.fromWebContents(event.sender)));
@@ -600,7 +675,7 @@ handleKugou('logout', async () => {
   await session.fromPartition(KUGOU_LOGIN_PARTITION).clearStorageData();
   return { ok: true };
 });
-ipcMain.handle('orbit-set-keep-awake', (_event, enabled) => {
+handleMainIpc('orbit-set-keep-awake', (_event, enabled) => {
   if (enabled) {
     if (displaySleepBlockerId === null || !powerSaveBlocker.isStarted(displaySleepBlockerId)) {
       displaySleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
@@ -701,9 +776,9 @@ async function checkForUpdates() {
   return updateCheckPromise;
 }
 
-ipcMain.handle('orbit-app-version', () => ({ version: app.getVersion(), updaterEnabled }));
-ipcMain.handle('orbit-check-update', () => checkForUpdates());
-ipcMain.handle('orbit-download-update', async () => {
+handleMainIpc('orbit-app-version', () => ({ version: app.getVersion(), updaterEnabled }));
+handleMainIpc('orbit-check-update', () => checkForUpdates());
+handleMainIpc('orbit-download-update', async () => {
   if (!updaterEnabled) return { ok: false, reason: 'dev' };
   try {
     await startVerifiedUpdateDownload();
@@ -712,7 +787,7 @@ ipcMain.handle('orbit-download-update', async () => {
     return { ok: false, reason: error?.message || 'download-failed' };
   }
 });
-ipcMain.handle('orbit-install-update', async () => {
+handleMainIpc('orbit-install-update', async () => {
   if (!updaterEnabled) return { ok: false, reason: 'dev' };
   if (!downloadedInstallerPath || downloadedInstallerVersion !== pendingUpdateInfo?.version) {
     return { ok: false, reason: 'not-downloaded' };
@@ -737,15 +812,15 @@ ipcMain.handle('orbit-install-update', async () => {
   return { ok: true };
 });
 
-ipcMain.handle('orbit-clear-qq-login', async () => {
+handleMainIpc('orbit-clear-qq-login', async () => {
   await session.fromPartition(QQ_LOGIN_PARTITION).clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage'] });
-  await fetch(`${appUrl}/api/qq/logout`, { method: 'POST' }).catch(() => {});
+  await fetch(`${appUrl}/api/qq/logout`, { method: 'POST', headers: localApiHeaders() }).catch(() => {});
   return { ok: true };
 });
 
-ipcMain.handle('orbit-clear-netease-login', async () => {
+handleMainIpc('orbit-clear-netease-login', async () => {
   await session.fromPartition(NETEASE_LOGIN_PARTITION).clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage'] });
-  await fetch(`${appUrl}/api/netease/logout`, { method: 'POST' }).catch(() => {});
+  await fetch(`${appUrl}/api/netease/logout`, { method: 'POST', headers: localApiHeaders() }).catch(() => {});
   return { ok: true };
 });
 
@@ -761,7 +836,12 @@ if (hasSingleInstanceLock) {
   app.on('window-all-closed', () => {
     if (displaySleepBlockerId !== null && powerSaveBlocker.isStarted(displaySleepBlockerId)) powerSaveBlocker.stop(displaySleepBlockerId);
     displaySleepBlockerId = null;
-    if (process.platform !== 'darwin') app.quit();
+    if (process.platform !== 'darwin') {
+      localServerInstance?.server?.close?.();
+      localServerInstance = null;
+      localServerPromise = null;
+      app.quit();
+    }
   });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

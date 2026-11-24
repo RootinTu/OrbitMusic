@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  RELEASE_REPO,
   buildManifestCandidates,
   buildUpdateCandidates,
   checkForVerifiedUpdate,
@@ -26,8 +27,20 @@ test('China update order prefers mirrors but retains official fallback', () => {
   const result = buildUpdateCandidates(info, true);
   assert.equal(result.fileName, 'ORBIT-Music-Setup-1.2.3.exe');
   assert.equal(result.expectedSha512, 'official-hash');
-  assert.match(result.urls[0], /^https:\/\/ghfast\.top\/https:\/\/github\.com\//);
-  assert.match(result.urls.at(-1), /^https:\/\/github\.com\//);
+  assert.match(result.urls[0], /^https:\/\/ghfast\.top\/https:\/\/github\.com\/RootinTu\/OrbitMusic\//);
+  assert.match(result.urls.at(-1), /^https:\/\/github\.com\/RootinTu\/OrbitMusic\//);
+});
+
+test('release repository config stays unified across updater and package.json', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const publish = pkg.build?.publish?.[0];
+  assert.equal(RELEASE_REPO.owner, 'RootinTu');
+  assert.equal(RELEASE_REPO.repo, 'OrbitMusic');
+  assert.equal(publish?.owner, RELEASE_REPO.owner);
+  assert.equal(publish?.repo, RELEASE_REPO.repo);
+  for (const url of buildManifestCandidates(true)) {
+    assert.ok(url.includes(`https://github.com/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/`));
+  }
 });
 
 test('non-China update order keeps GitHub first', () => {

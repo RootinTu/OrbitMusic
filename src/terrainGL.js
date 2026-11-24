@@ -488,21 +488,31 @@ export function createTerrainGL(canvas, options = {}) {
   if (!gl) return null;
 
   const program = gl.createProgram();
-  gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERT));
-  gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+  const vertShader = compile(gl, gl.VERTEX_SHADER, VERT);
+  const fragShader = compile(gl, gl.FRAGMENT_SHADER, FRAG);
+  gl.attachShader(program, vertShader);
+  gl.attachShader(program, fragShader);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error('program link failed: ' + gl.getProgramInfoLog(program));
+    const info = gl.getProgramInfoLog(program);
+    gl.detachShader?.(program, vertShader);
+    gl.detachShader?.(program, fragShader);
+    gl.deleteShader?.(vertShader);
+    gl.deleteShader?.(fragShader);
+    gl.deleteProgram?.(program);
+    throw new Error('program link failed: ' + info);
   }
   gl.useProgram(program);
 
   const box = buildBox();
   const vao = gl.createVertexArray();
+  const buffers = [];
   gl.bindVertexArray(vao);
   const bind = (name, data, size) => {
     const loc = gl.getAttribLocation(program, name);
     if (loc < 0) return;
     const buf = gl.createBuffer();
+    buffers.push(buf);
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(loc);
@@ -512,6 +522,7 @@ export function createTerrainGL(canvas, options = {}) {
   bind('aNormal', box.normals, 3);
   bind('aUv', box.uvs, 2);
   const ibo = gl.createBuffer();
+  buffers.push(ibo);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, box.indices, gl.STATIC_DRAW);
   gl.bindVertexArray(null);
@@ -751,13 +762,30 @@ export function createTerrainGL(canvas, options = {}) {
     gl.bindVertexArray(null);
   }
 
+  let disposed = false;
+
   return {
     resize,
     frame,
     instanceCount: gridSize * gridSize,
-    dispose() {
-      gl.deleteProgram(program);
-      gl.deleteVertexArray(vao);
+    dispose({ loseContext = false } = {}) {
+      if (disposed) return;
+      disposed = true;
+      gl.useProgram?.(null);
+      gl.bindVertexArray?.(null);
+      gl.bindBuffer?.(gl.ARRAY_BUFFER, null);
+      gl.bindBuffer?.(gl.ELEMENT_ARRAY_BUFFER, null);
+      for (const buf of buffers) gl.deleteBuffer?.(buf);
+      buffers.length = 0;
+      gl.deleteVertexArray?.(vao);
+      gl.detachShader?.(program, vertShader);
+      gl.detachShader?.(program, fragShader);
+      gl.deleteShader?.(vertShader);
+      gl.deleteShader?.(fragShader);
+      gl.deleteProgram?.(program);
+      if (loseContext) {
+        gl.getExtension?.('WEBGL_lose_context')?.loseContext?.();
+      }
     }
   };
 }

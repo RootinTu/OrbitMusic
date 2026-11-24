@@ -1133,9 +1133,8 @@ async function handleRoute(req, res, parsedUrl, writeJson = writeJsonResponse) {
         headers: { 'Referer': 'https://y.qq.com/' }
       });
       if (!fetchRes.ok) throw new Error('Proxy cover failed');
-      res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Content-Type', fetchRes.headers.get('content-type') || 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=2592000');
+      res.setHeader('Cache-Control', 'private, max-age=86400');
       const buffer = await fetchRes.arrayBuffer();
       res.end(Buffer.from(buffer));
       return true;

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar from './MusicAccountAvatar.jsx';
+import { createAsyncSlot, isAbortError } from './asyncSlot.js';
 import { musicAccountName } from './musicAccounts.js';
 import { MAX_NETEASE_IMPORTS } from './neteaseLibrary.js';
 
@@ -25,29 +26,55 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
   const [selected, setSelected] = useState(() => new Set());
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const playlistsSlotRef = useRef(null);
+  const searchSlotRef = useRef(null);
+  const previewSlotRef = useRef(null);
+  if (!playlistsSlotRef.current) playlistsSlotRef.current = createAsyncSlot();
+  if (!searchSlotRef.current) searchSlotRef.current = createAsyncSlot();
+  if (!previewSlotRef.current) previewSlotRef.current = createAsyncSlot();
   const desktop = Boolean(window.orbitDesktop?.isDesktop);
   const selectedSongs = useMemo(() => preview?.songs?.filter(song => selected.has(song.id)) || [], [preview, selected]);
 
-  const loadPlaylists = async () => {
+  const cancelPendingRequests = useCallback(() => {
+    playlistsSlotRef.current.cancel();
+    searchSlotRef.current.cancel();
+    previewSlotRef.current.cancel();
+  }, []);
+
+  const loadPlaylists = useCallback(async () => {
+    const task = playlistsSlotRef.current.start();
     setBusy('playlists');
     try {
-      const payload = await requestJson('/api/netease/user/playlists');
+      const payload = await requestJson('/api/netease/user/playlists', { signal: task.signal });
+      if (!task.isCurrent()) return;
       setPlaylists(payload.playlists || []);
-    } catch (reason) { setError(reason.message); }
-    finally { setBusy(''); }
-  };
+    } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
+      setError(reason.message);
+    } finally {
+      if (task.finish()) setBusy(current => (current === 'playlists' ? '' : current));
+    }
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      cancelPendingRequests();
+      setBusy('');
+      return undefined;
+    }
     setError('');
     if (browseAccountPlaylists) {
+      previewSlotRef.current.cancel();
       setPreview(null);
       setSelected(new Set());
     }
     const controller = new AbortController();
     refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
-    return () => controller.abort();
-  }, [browseAccountPlaylists, open, refresh]);
+    return () => {
+      controller.abort();
+      cancelPendingRequests();
+    };
+  }, [browseAccountPlaylists, cancelPendingRequests, loadPlaylists, open, refresh]);
 
   const login = async () => {
     if (!desktop) return setError('扫码登录仅在 ORBIT 桌面应用中开放。');
@@ -59,39 +86,61 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
       else await refresh();
       await loadPlaylists();
     } catch (reason) { setError(reason.message); }
-    finally { setBusy(''); }
+    finally { setBusy(current => (current === 'login' ? '' : current)); }
   };
 
   const logout = async () => {
+    cancelPendingRequests();
     setBusy('logout'); setError('');
     try {
       if (desktop) await window.orbitDesktop.clearNeteaseLogin();
       else await requestJson('/api/netease/logout', { method: 'POST' });
-      update(null); setPlaylists([]); setPreview(null);
+      update(null); setPlaylists([]); setPreview(null); setSelected(new Set());
     } catch (reason) { setError(reason.message); }
-    finally { setBusy(''); }
+    finally { setBusy(current => (current === 'logout' ? '' : current)); }
   };
 
   const search = async event => {
     event.preventDefault();
-    if (!query.trim()) return;
+    const clean = query.trim();
+    if (!clean) return;
+    const task = searchSlotRef.current.start();
     setBusy('search'); setError('');
     try {
-      const payload = await requestJson(`/api/netease/search?keywords=${encodeURIComponent(query.trim())}&limit=20`);
+      const payload = await requestJson(`/api/netease/search?keywords=${encodeURIComponent(clean)}&limit=20`, { signal: task.signal });
+      if (!task.isCurrent()) return;
       setResults(payload.songs || []);
-    } catch (reason) { setError(reason.message); }
-    finally { setBusy(''); }
+    } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
+      setError(reason.message);
+    } finally {
+      if (task.finish()) setBusy(current => (current === 'search' ? '' : current));
+    }
   };
 
   const openPlaylist = async playlist => {
-    setBusy(`playlist:${playlist.id}`); setError('');
+    const busyKey = `playlist:${playlist.id}`;
+    const task = previewSlotRef.current.start();
+    setBusy(busyKey); setError('');
     try {
-      const payload = await requestJson(`/api/netease/playlist/tracks?id=${encodeURIComponent(playlist.id)}&limit=all`);
+      const payload = await requestJson(`/api/netease/playlist/tracks?id=${encodeURIComponent(playlist.id)}&limit=all`, { signal: task.signal });
+      if (!task.isCurrent()) return;
       const songs = payload.songs || [];
       setPreview({ ...playlist, ...(payload.playlist || {}), songs });
       setSelected(new Set(songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)));
-    } catch (reason) { setError(reason.message); }
-    finally { setBusy(''); }
+    } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
+      setError(reason.message);
+    } finally {
+      if (task.finish()) setBusy(current => (current === busyKey ? '' : current));
+    }
+  };
+
+  const closePreview = () => {
+    previewSlotRef.current.cancel();
+    setBusy(current => (current.startsWith('playlist:') ? '' : current));
+    setPreview(null);
+    setSelected(new Set());
   };
 
   const toggle = id => setSelected(previous => {
@@ -136,7 +185,7 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
           <div className="bridge-pane bridge-library">
             <GlassSurface variant="dialog-pane" />
             {preview ? <>
-              <div className="bridge-preview-head"><BridgeGlassButton className="bridge-preview-back" onClick={() => setPreview(null)} aria-label="返回歌单列表">←</BridgeGlassButton><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
+              <div className="bridge-preview-head"><BridgeGlassButton className="bridge-preview-back" onClick={closePreview} aria-label="返回歌单列表">←</BridgeGlassButton><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
               <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><BridgeGlassButton onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 30 首</BridgeGlassButton><BridgeGlassButton onClick={() => setSelected(new Set())}>清空</BridgeGlassButton></div>
               <div className="bridge-preview-list">{preview.songs.map(song => <label className={`bridge-preview-row ${selected.has(song.id) ? 'checked' : ''}`} key={song.id}><input type="checkbox" checked={selected.has(song.id)} onChange={() => toggle(song.id)} /><b>{song.name}</b><small>{song.artist} · {song.album}</small></label>)}</div>
               <BridgeGlassButton className="bridge-preview-import" disabled={!selected.size} onClick={importPreview}>导入 {selected.size} 首到音乐宇宙</BridgeGlassButton>

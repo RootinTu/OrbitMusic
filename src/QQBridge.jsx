@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar, { MusicAccountAvatarPicker } from './MusicAccountAvatar.jsx';
+import { createAsyncSlot, isAbortError } from './asyncSlot.js';
 import { musicAccountName } from './musicAccounts.js';
 import { LOOSE_PLAYLIST_ID, MAX_QQ_IMPORTS, MAX_QQ_PLAYLISTS } from './qqLibrary.js';
 
@@ -74,6 +75,14 @@ export default function QQBridge({
   const [checkRows, setCheckRows] = useState([]);
   const [checkRunning, setCheckRunning] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
+  const playlistsSlotRef = useRef(null);
+  const searchSlotRef = useRef(null);
+  const previewSlotRef = useRef(null);
+  const selfCheckSlotRef = useRef(null);
+  if (!playlistsSlotRef.current) playlistsSlotRef.current = createAsyncSlot();
+  if (!searchSlotRef.current) searchSlotRef.current = createAsyncSlot();
+  if (!previewSlotRef.current) previewSlotRef.current = createAsyncSlot();
+  if (!selfCheckSlotRef.current) selfCheckSlotRef.current = createAsyncSlot();
   const desktop = Boolean(window.orbitDesktop?.isDesktop);
 
   const songKey = (song, index) => `${song?.mid || song?.id || index}`;
@@ -116,32 +125,51 @@ export default function QQBridge({
   ]), [accountPlaylists]);
   const createdCount = playlistGroups[0].items.length;
 
-  const loadPlaylists = async () => {
+  const cancelPendingRequests = useCallback(() => {
+    playlistsSlotRef.current.cancel();
+    searchSlotRef.current.cancel();
+    previewSlotRef.current.cancel();
+    selfCheckSlotRef.current.cancel();
+  }, []);
+
+  const loadPlaylists = useCallback(async () => {
+    const task = playlistsSlotRef.current.start();
     setBusy('playlists');
     setError('');
     try {
-      const payload = await requestJson('/api/qq/user/playlists');
+      const payload = await requestJson('/api/qq/user/playlists', { signal: task.signal });
+      if (!task.isCurrent()) return;
       setAccountPlaylists(payload.playlists || []);
       setDiagnostics(payload.diagnostics || null);
     } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
       setError(reason.message);
     } finally {
-      setBusy('');
+      if (task.finish()) setBusy(current => (current === 'playlists' ? '' : current));
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      cancelPendingRequests();
+      setBusy('');
+      setCheckRunning(false);
+      return undefined;
+    }
     setClearArmed(false);
     setCheckOpen(false);
     if (browseAccountPlaylists) {
+      previewSlotRef.current.cancel();
       setPreview(null);
       setSelected(new Set());
     }
     const controller = new AbortController();
     refresh(controller.signal).then(next => { if (next?.loggedIn && !controller.signal.aborted) loadPlaylists(); });
-    return () => controller.abort();
-  }, [browseAccountPlaylists, open, refresh]);
+    return () => {
+      controller.abort();
+      cancelPendingRequests();
+    };
+  }, [browseAccountPlaylists, cancelPendingRequests, loadPlaylists, open, refresh]);
 
   const login = async () => {
     if (!desktop) {
@@ -158,11 +186,12 @@ export default function QQBridge({
     } catch (reason) {
       setError(reason.message);
     } finally {
-      setBusy('');
+      setBusy(current => (current === 'login' ? '' : current));
     }
   };
 
   const logout = async () => {
+    cancelPendingRequests();
     setBusy('logout');
     setError('');
     try {
@@ -170,25 +199,32 @@ export default function QQBridge({
       else await requestJson('/api/qq/logout', { method: 'POST' });
       update(null);
       setAccountPlaylists([]);
+      setPreview(null);
+      setSelected(new Set());
+      setCheckRunning(false);
     } catch (reason) {
       setError(reason.message);
     } finally {
-      setBusy('');
+      setBusy(current => (current === 'logout' ? '' : current));
     }
   };
 
   const search = async event => {
     event?.preventDefault();
-    if (!query.trim()) return;
+    const clean = query.trim();
+    if (!clean) return;
+    const task = searchSlotRef.current.start();
     setBusy('search');
     setError('');
     try {
-      const payload = await requestJson(`/api/qq/search?keywords=${encodeURIComponent(query.trim())}&limit=16`);
+      const payload = await requestJson(`/api/qq/search?keywords=${encodeURIComponent(clean)}&limit=16`, { signal: task.signal });
+      if (!task.isCurrent()) return;
       setResults(payload.songs || []);
     } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
       setError(reason.message);
     } finally {
-      setBusy('');
+      if (task.finish()) setBusy(current => (current === 'search' ? '' : current));
     }
   };
 
@@ -201,21 +237,28 @@ export default function QQBridge({
       setError('当前歌单里还没有 QQ 歌曲，先导入几首再自检。');
       return;
     }
+    const task = selfCheckSlotRef.current.start();
     setCheckRunning(true);
     setCheckOpen(true);
     setCheckRows([]);
     setError('');
     const rows = [];
-    for (const song of songs) {
-      try {
-        const result = await requestJson(`/api/qq/selfcheck?mid=${encodeURIComponent(song.mid)}&mediaMid=${encodeURIComponent(song.mediaMid || '')}`);
-        rows.push({ title: song.title, ...result });
-      } catch (reason) {
-        rows.push({ title: song.title, ok: false, url: { message: reason.message } });
+    try {
+      for (const song of songs) {
+        if (!task.isCurrent()) return;
+        try {
+          const result = await requestJson(`/api/qq/selfcheck?mid=${encodeURIComponent(song.mid)}&mediaMid=${encodeURIComponent(song.mediaMid || '')}`, { signal: task.signal });
+          if (!task.isCurrent()) return;
+          rows.push({ title: song.title, ...result });
+        } catch (reason) {
+          if (!task.isCurrent() || isAbortError(reason)) return;
+          rows.push({ title: song.title, ok: false, url: { message: reason.message } });
+        }
+        setCheckRows(rows.slice());
       }
-      setCheckRows(rows.slice());
+    } finally {
+      if (task.finish()) setCheckRunning(false);
     }
-    setCheckRunning(false);
   };
 
   const importSongs = (songs, meta = null) => {
@@ -235,14 +278,18 @@ export default function QQBridge({
       setError('没有识别到 QQ 音乐歌单 ID。');
       return;
     }
-    if (playlistFull) {
+    const existing = playlists.find(item => item.id === id);
+    if (!existing && playlists.length >= MAX_QQ_PLAYLISTS) {
       setError(`本机最多保存 ${MAX_QQ_PLAYLISTS} 个歌单，请先移除一个再导入新的。`);
       return;
     }
-    setBusy(`playlist:${id}`);
+    const busyKey = `playlist:${id}`;
+    const task = previewSlotRef.current.start();
+    setBusy(busyKey);
     setError('');
     try {
-      const payload = await requestJson(`/api/qq/playlist/tracks?id=${encodeURIComponent(id)}&limit=all`);
+      const payload = await requestJson(`/api/qq/playlist/tracks?id=${encodeURIComponent(id)}&limit=all`, { signal: task.signal });
+      if (!task.isCurrent()) return;
       const songs = payload.tracks || payload.songs || [];
       if (!songs.length) {
         setError('这个歌单没有取到歌曲，可能受版权或隐私设置限制。');
@@ -260,17 +307,19 @@ export default function QQBridge({
       });
       // 默认先按剩余空位从头勾选，用户再自己增删。
       // 这里必须现场算：setPreview 之后本轮闭包里的 previewRoom 还是上一个歌单的。
-      const existing = playlists.find(item => item.id === id);
       const roomNow = existing ? Math.max(0, MAX_QQ_IMPORTS - existing.count) : MAX_QQ_IMPORTS;
       setSelected(new Set(songs.slice(0, roomNow).map(songKey)));
     } catch (reason) {
+      if (!task.isCurrent() || isAbortError(reason)) return;
       setError(reason.message);
     } finally {
-      setBusy('');
+      if (task.finish()) setBusy(current => (current === busyKey ? '' : current));
     }
   };
 
   const closePreview = () => {
+    previewSlotRef.current.cancel();
+    setBusy(current => (current.startsWith('playlist:') ? '' : current));
     setPreview(null);
     setSelected(new Set());
   };

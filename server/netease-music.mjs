@@ -1,13 +1,68 @@
+import { createHash } from 'node:crypto';
+
 const DEFAULT_BITRATE = '320000';
 const ALLOWED_BITRATES = new Set(['128000', '192000', '320000']);
+const AUDIO_CDN_SUFFIXES = ['126.net', '163.com', 'netease.com'];
+const MAX_PLAYABLE_CACHE_ENTRIES = 120;
+const PLAYABLE_CACHE_TTL_MS = 8 * 60 * 1000;
 const BASE_HEADERS = {
   Accept: 'application/json, text/plain, */*',
   Referer: 'https://music.163.com/',
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36',
 };
 
+export function createBoundedTtlCache({ maxEntries = MAX_PLAYABLE_CACHE_ENTRIES, ttlMs = PLAYABLE_CACHE_TTL_MS, now = () => Date.now() } = {}) {
+  const limit = Math.max(1, Number(maxEntries) || 1);
+  const store = new Map();
+
+  function pruneExpired(currentTime) {
+    for (const [key, entry] of store) {
+      if (entry.expiresAt <= currentTime) store.delete(key);
+    }
+  }
+
+  return {
+    get(key) {
+      const entry = store.get(key);
+      if (!entry) return undefined;
+      const currentTime = now();
+      if (entry.expiresAt <= currentTime) {
+        store.delete(key);
+        return undefined;
+      }
+      // 刷新 LRU 位置
+      store.delete(key);
+      store.set(key, entry);
+      return entry.value;
+    },
+    set(key, value, customTtlMs = ttlMs) {
+      const currentTime = now();
+      pruneExpired(currentTime);
+      store.delete(key);
+      while (store.size >= limit) {
+        const oldestKey = store.keys().next().value;
+        if (oldestKey === undefined) break;
+        store.delete(oldestKey);
+      }
+      store.set(key, { value, expiresAt: currentTime + customTtlMs });
+    },
+    clear() {
+      store.clear();
+    },
+    get size() {
+      return store.size;
+    },
+  };
+}
+
+export function hashNeteaseCookieScope(cookie) {
+  const normalized = normalizeNeteaseCookie(cookie);
+  if (!normalized) return 'anon';
+  return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+}
+
 let browserCookie = '';
-const playableCache = new Map();
+const playableCache = createBoundedTtlCache();
 
 export function normalizeNeteaseCookie(value) {
   return String(value || '')
@@ -51,6 +106,30 @@ function headers(cookie = browserCookie, extra = {}) {
   return { ...BASE_HEADERS, ...(normalized ? { Cookie: normalized } : {}), ...extra };
 }
 
+export function isAllowedNeteaseAudioUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    if (parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    return AUDIO_CDN_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`));
+  } catch {
+    return false;
+  }
+}
+
+export function buildNeteaseAudioHeaders(range) {
+  const audioHeaders = {
+    Accept: '*/*',
+    Referer: BASE_HEADERS.Referer,
+    'User-Agent': BASE_HEADERS['User-Agent'],
+  };
+  if (typeof range === 'string' && range.trim()) {
+    audioHeaders.Range = range.trim();
+  }
+  return audioHeaders;
+}
+
 async function json(url, options = {}) {
   const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({}));
@@ -72,12 +151,12 @@ async function account(cookie = browserCookie) {
 
 async function playableUrl(id, bitrate, cookie = browserCookie) {
   const br = normalizeNeteaseBitrate(bitrate);
-  const key = `${id}:${br}:${cookie}`;
+  const key = `${id}:${br}:${hashNeteaseCookieScope(cookie)}`;
   const cached = playableCache.get(key);
-  if (cached?.expiresAt > Date.now()) return cached.url;
+  if (cached !== undefined) return cached;
   const payload = await json(buildNeteasePlayerUrl(id, br), { headers: headers(cookie) });
   const url = payload?.data?.[0]?.url || '';
-  playableCache.set(key, { url, expiresAt: Date.now() + 8 * 60 * 1000 });
+  if (url) playableCache.set(key, url);
   return url;
 }
 
@@ -217,8 +296,8 @@ export function registerNeteaseMusicExpressRoutes(app) {
       if (!(await account()).loggedIn) return errorResponse(response, 401, '网易云登录已失效，请重新扫码登录');
       const url = await playableUrl(id, request.query.br);
       if (!url) return errorResponse(response, 404, '网易云未返回可播放地址，歌曲可能受会员或版权限制');
-      const upstreamHeaders = headers(browserCookie);
-      if (request.headers.range) upstreamHeaders.Range = request.headers.range;
+      if (!isAllowedNeteaseAudioUrl(url)) return errorResponse(response, 502, '网易云返回了不受信任的音源地址');
+      const upstreamHeaders = buildNeteaseAudioHeaders(request.headers.range);
       const upstream = await fetch(url, { headers: upstreamHeaders });
       if (!upstream.ok && upstream.status !== 206) return errorResponse(response, upstream.status, '网易云音源请求失败');
       await streamAudio(request, response, upstream);

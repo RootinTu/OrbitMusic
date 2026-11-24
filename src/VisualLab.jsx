@@ -69,6 +69,20 @@ export default function VisualLab() {
 
   useEffect(() => () => {
     if (customUrlRef.current) URL.revokeObjectURL(customUrlRef.current);
+    const graph = graphRef.current;
+    if (graph) {
+      graphRef.current = null;
+      try { graph.engine?.dispose?.(); } catch { /* ignore */ }
+      try { graph.source?.disconnect?.(); } catch { /* ignore */ }
+      try { graph.analyser?.disconnect?.(); } catch { /* ignore */ }
+      if (graph.context && graph.context.state !== 'closed') {
+        graph.context.close?.().catch?.(() => {});
+      }
+    }
+    if (glRef.current) {
+      glRef.current.dispose({ loseContext: true });
+      glRef.current = null;
+    }
   }, []);
 
   const chooseLocalAudio = event => {

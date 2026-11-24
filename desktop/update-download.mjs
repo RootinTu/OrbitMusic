@@ -3,8 +3,12 @@ import { execFile } from 'node:child_process';
 import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-const OWNER = 'hb1234567898';
-const REPO = 'aimusic';
+export const RELEASE_REPO = Object.freeze({
+  owner: 'RootinTu',
+  repo: 'OrbitMusic',
+});
+const OWNER = RELEASE_REPO.owner;
+const REPO = RELEASE_REPO.repo;
 const MIRROR_PREFIXES = [
   'https://ghfast.top/',
   'https://ghproxy.net/',

@@ -20,9 +20,9 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { signManifestContent, verifyManifestSignature } from '../desktop/update-download.mjs';
+import { RELEASE_REPO, signManifestContent, verifyManifestSignature } from '../desktop/update-download.mjs';
 
-const repo = { owner: 'hb1234567898', name: 'aimusic' };
+const repo = { owner: RELEASE_REPO.owner, name: RELEASE_REPO.repo };
 const apiBase = `https://api.github.com/repos/${repo.owner}/${repo.name}`;
 const uploadBase = `https://uploads.github.com/repos/${repo.owner}/${repo.name}`;
 
