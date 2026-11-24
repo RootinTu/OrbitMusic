@@ -1,7 +1,7 @@
 // One registry shared by the full-scene renderer and the DOM control surfaces.
 const surfaces = new Set();
 const subscribers = new Set();
-const variants = new Set(['player', 'control', 'subtle', 'dialog', 'dialog-pane', 'dialog-control']);
+const variants = new Set(['player', 'control', 'subtle']);
 
 export function resolveGlassVariant({ variant, subtle, control } = {}) {
   return variants.has(variant) ? variant : subtle ? 'subtle' : control ? 'control' : 'player';
@@ -56,7 +56,7 @@ export function getGlassSurfaceLayout(entry) {
   }
   const limit = Math.min(rect.width, rect.height) / 2;
   const cssRadius = parseFloat(entry.radius) || 0;
-  const capsule = options.variant === 'control' || options.variant === 'dialog-control';
+  const capsule = options.variant === 'control';
   const radius = options.cornerRadius ?? (capsule ? limit
     : entry.radius?.includes('%') ? cssRadius * Math.min(rect.width, rect.height) / 100 : cssRadius);
   return {

@@ -12,7 +12,9 @@ import {
   normalizeNeteaseBitrate,
   normalizeNeteaseCookie,
   registerNeteaseMusicExpressRoutes,
+  safeNeteaseCoverUrl,
 } from './netease-music.mjs';
+import { registerKugouMusicExpressRoutes, safeKugouImage } from './kugou-music.mjs';
 
 test('normalizes multiline Netease cookies and detects MUSIC_U', () => {
   const cookie = normalizeNeteaseCookie('MUSIC_U=token;\n__csrf=value;;');
@@ -132,6 +134,53 @@ test('Netease /api/netease/audio strips MUSIC_U cookie before fetching audio CDN
   } finally {
     globalThis.fetch = originalFetch;
     await originalFetch(`${baseUrl}/api/netease/logout`, { method: 'POST' }).catch(() => {});
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('Kugou and Netease cover proxies validate host allowlists and serve same-origin images', async () => {
+  assert.equal(safeKugouImage('http://imge.kugou.com/stdmusic/{size}/a.jpg'), 'https://imge.kugou.com/stdmusic/400/a.jpg');
+  assert.equal(safeKugouImage('https://kugou.com.evil.example/a.jpg'), '');
+  assert.equal(safeNeteaseCoverUrl('http://p1.music.126.net/demo.jpg'), 'https://p1.music.126.net/demo.jpg');
+  assert.equal(safeNeteaseCoverUrl('http://127.0.0.1:45437/secret.jpg'), '');
+
+  const app = express();
+  registerKugouMusicExpressRoutes(app);
+  registerNeteaseMusicExpressRoutes(app);
+  const server = await new Promise((resolve) => {
+    const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async (url, options = {}) => {
+    const href = String(url);
+    if (href.startsWith(baseUrl)) return originalFetch(url, options);
+    assert.equal(options.headers?.Cookie, undefined);
+    return new Response(Buffer.from('FAKE-JPEG'), {
+      status: 200,
+      headers: { 'Content-Type': 'image/jpeg' },
+    });
+  };
+
+  try {
+    const badKugou = await originalFetch(`${baseUrl}/api/kugou/cover?url=${encodeURIComponent('https://evil.example/x.jpg')}`);
+    assert.equal(badKugou.status, 400);
+
+    const okKugou = await originalFetch(`${baseUrl}/api/kugou/cover?url=${encodeURIComponent('https://imge.kugou.com/stdmusic/400/demo.jpg')}`);
+    assert.equal(okKugou.status, 200);
+    assert.equal(okKugou.headers.get('content-type'), 'image/jpeg');
+    assert.equal(await okKugou.text(), 'FAKE-JPEG');
+
+    const badNetease = await originalFetch(`${baseUrl}/api/netease/cover?url=${encodeURIComponent('https://evil.example/x.jpg')}`);
+    assert.equal(badNetease.status, 400);
+
+    const okNetease = await originalFetch(`${baseUrl}/api/netease/cover?url=${encodeURIComponent('https://p1.music.126.net/demo.jpg')}`);
+    assert.equal(okNetease.status, 200);
+    assert.equal(okNetease.headers.get('content-type'), 'image/jpeg');
+    assert.equal(await okNetease.text(), 'FAKE-JPEG');
+  } finally {
+    globalThis.fetch = originalFetch;
     await new Promise(resolve => server.close(resolve));
   }
 });

@@ -1,0 +1,67 @@
+name: CI & Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check desktop and server scripts
+        run: |
+          node --check desktop/main.js
+          node --check desktop/ipc-guard.mjs
+          node --check desktop/update-download.mjs
+          node --check desktop/kugou-session.mjs
+          node --check local-server.mjs
+          node --check server/http-client.mjs
+          node --check server/local-api-guard.mjs
+          node --check server/qq-music.mjs
+          node --check server/netease-music.mjs
+          node --check server/kugou-music.mjs
+          node --check scripts/release.mjs
+          node --check scripts/fix-release.mjs
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build production bundle
+        run: npm run build
+
+  security-audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high

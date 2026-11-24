@@ -1,11 +1,20 @@
 import { useEffect, useRef } from 'react';
 import { getGlassSurfaceLayout, getGlassSurfaces, observeGlassSurfaces, setGlassSurfaceReady } from './glassScene.js';
 import { createGlassPresentation } from './glassPresentation.js';
+import { createGlassFrameScheduler } from './glassFrameScheduler.js';
 
 /** Upstream's HTML-in-Canvas path: the live scene, not a canvas-only reconstruction. */
-export default function GlassBackdrop({ children, soundfield }) {
+export default function GlassBackdrop({ children, soundfield, active = true, paused = false }) {
   const mountRef = useRef(null);
   const contentRef = useRef(null);
+  const playbackStateRef = useRef({ active, paused });
+  const wakeRef = useRef(null);
+  playbackStateRef.current.active = Boolean(active);
+  playbackStateRef.current.paused = Boolean(paused);
+
+  useEffect(() => {
+    wakeRef.current?.();
+  }, [active, paused]);
   useEffect(() => {
     const mount = mountRef.current, content = contentRef.current;
     const root = document.documentElement;
@@ -115,27 +124,6 @@ export default function GlassBackdrop({ children, soundfield }) {
             shadowOffsetY: 7,
             shadowBlur: 18,
           },
-          dialog: {
-            zIndex: 4,
-            spacing: 0,
-            blur: 14,
-            bezelWidth: 25,
-            thickness: 86,
-            displacementFactor: 0.95,
-            displacementBlur: 5,
-            dispersion: 0.19,
-            ior: 1.54,
-            tint: { r: 0.9, g: 0.95, b: 1, a: 0.045 },
-            specularOpacity: 0.9,
-            specularStrength: 1.28,
-            specularWidth: 1.45,
-            specularSharpness: 3,
-            oppositeSpecularStrength: 0.8,
-            reflectionOffset: 22,
-            shadowColor: { r: 0, g: 0, b: 0, a: 0.26 },
-            shadowOffsetY: 14,
-            shadowBlur: 32,
-          },
           subtle: {
             zIndex: 3,
             spacing: 0,
@@ -158,9 +146,6 @@ export default function GlassBackdrop({ children, soundfield }) {
             shadowBlur: 12,
           },
         };
-        // Render the bridge's panes and pills above its outer refraction.
-        CONTAINER_PRESETS['dialog-pane'] = { ...CONTAINER_PRESETS.control, zIndex: 5 };
-        CONTAINER_PRESETS['dialog-control'] = { ...CONTAINER_PRESETS.control, zIndex: 6 };
         const containers = Object.fromEntries(
           Object.entries(CONTAINER_PRESETS).map(([key, preset]) => {
             const container = new Container(preset);
@@ -168,11 +153,13 @@ export default function GlassBackdrop({ children, soundfield }) {
             return [key, container];
           }),
         );
+        const scheduler = createGlassFrameScheduler();
         const syncSurfaces = () => {
           const entries = getGlassSurfaces();
           for (const [entry, glass] of nodes) {
             if (!entries.has(entry)) { glass.remove(); nodes.delete(entry); }
           }
+          scheduler.markDirty(performance.now());
         };
         unsubscribe = observeGlassSurfaces(syncSurfaces);
         syncSurfaces();
@@ -182,23 +169,51 @@ export default function GlassBackdrop({ children, soundfield }) {
         const requestVisiblePaint = () => {
           if (document.hidden) return;
           firstVisibleFrame = undefined;
+          scheduler.markDirty(performance.now());
           canvas.requestPaint();
         };
+        const noteActivity = () => scheduler.markActivity(performance.now());
+        wakeRef.current = () => scheduler.markDirty(performance.now());
         document.addEventListener('visibilitychange', requestVisiblePaint);
+        window.addEventListener('pointerdown', noteActivity, { passive: true });
+        window.addEventListener('pointermove', noteActivity, { passive: true });
+        window.addEventListener('wheel', noteActivity, { passive: true });
+        window.addEventListener('keydown', noteActivity, { passive: true });
+        window.addEventListener('resize', requestVisiblePaint, { passive: true });
         const stopDesktopListener = window.orbitDesktop?.onVisualActivity?.(visible => {
           if (visible) requestVisiblePaint();
         });
         detachVisibility = () => {
+          wakeRef.current = null;
           document.removeEventListener('visibilitychange', requestVisiblePaint);
+          window.removeEventListener('pointerdown', noteActivity);
+          window.removeEventListener('pointermove', noteActivity);
+          window.removeEventListener('wheel', noteActivity);
+          window.removeEventListener('keydown', noteActivity);
+          window.removeEventListener('resize', requestVisiblePaint);
           stopDesktopListener?.();
         };
         const tick = time => {
           if (failed || disposed || token !== generation) return;
           frame = requestAnimationFrame(tick);
-          // Do not queue whole-scene frames faster than the GPU can present them.
-          // Otherwise old covers/text can remain on screen behind a long GPU queue.
-          if (document.hidden || inFlight) return;
+          // Do not queue whole-scene frames faster than the GPU can present them,
+          // and throttle idle/occluded frames to avoid needless DOM-to-WebGPU copies.
+          const surfaceList = getGlassSurfaces();
+          let hasPending = false;
+          for (const entry of surfaceList) {
+            if (!entry.ready) { hasPending = true; break; }
+          }
+          const { active: sceneActive, paused: scenePaused } = playbackStateRef.current;
+          if (!scheduler.shouldRender(time, {
+            hidden: document.hidden,
+            inFlight,
+            paused: scenePaused,
+            active: sceneActive,
+            hasPendingSurfaces: hasPending,
+            initialized: active,
+          })) return;
           inFlight = true;
+          scheduler.markRendered(time);
           firstVisibleFrame ??= time;
           try {
             const nextDpr = Math.min(devicePixelRatio || 1, 1.5);

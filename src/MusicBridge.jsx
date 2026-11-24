@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton } from './BridgeGlassControls.jsx';
 import QQBridge from './QQBridge.jsx';
 import NeteaseBridge from './NeteaseBridge.jsx';
@@ -61,11 +60,10 @@ export default function MusicBridge({ open, provider, onProviderChange, browseAc
     <div className="bridge-backdrop" hidden={!open} onMouseDown={event => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section className="qq-bridge liquid-panel" ref={dialogRef} id="music-bridge" tabIndex={-1}
+      <section className="qq-bridge" ref={dialogRef} id="music-bridge" tabIndex={-1}
         role="dialog" aria-modal="true" aria-labelledby="music-bridge-title" onKeyDown={onDialogKeyDown}>
-        {open && <GlassSurface variant="dialog" />}
         <div className="bridge-head">
-          <h2 id="music-bridge-title">{provider === 'kugou' || (provider === 'qq' ? qq : netease).account.profile ? '音乐账号' : '登录'}</h2>
+          <h2 id="music-bridge-title">{({ qq, netease, kugou }[provider]?.account?.profile ? '音乐账号' : '登录')}</h2>
           <div className="bridge-provider-tabs" role="tablist" aria-label="音乐平台" ref={tabsRef} onKeyDown={onTabKeyDown}>
             {platforms.map(({ id, name }) => (
               <BridgeGlassButton key={id} id={`bridge-tab-${id}`} role="tab"

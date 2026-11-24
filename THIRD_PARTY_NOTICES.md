@@ -1,6 +1,6 @@
 # Third-party notices
 
-`server/qq-music.mjs`, `server/netease-music.mjs`, and the QQ Music / Netease Cloud Music login flows in `desktop/main.js` are adapted from [Sonic Topography](https://github.com/yin-yizhen/sonic-topography), copyright 2026 Sonic Topography contributors.
+`server/qq-music.mjs`, `server/qq-auth.mjs`, `server/qq-lyrics.mjs`, `server/netease-music.mjs`, and the QQ Music / Netease Cloud Music login flows in `desktop/main.js` are adapted from [Sonic Topography](https://github.com/yin-yizhen/sonic-topography), copyright 2026 Sonic Topography contributors.
 
 They are used here for local personal, non-commercial use under that project's **Non-Commercial Learning License**. The upstream license permits reading, studying, modifying, and running the code locally for personal non-commercial use. Commercial use, resale, sublicensing, advertising services, and removal of the notice require written permission from the copyright holder.
 
@@ -29,3 +29,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Direct Runtime & Build Dependencies
+
+| Package | License | Repository / Homepage |
+| :--- | :--- | :--- |
+| `react` / `react-dom` | MIT | https://github.com/facebook/react |
+| `express` | MIT | https://github.com/expressjs/express |
+| `electron` | MIT | https://github.com/electron/electron |
+| `electron-updater` / `electron-builder` | MIT | https://github.com/electron-userland/electron-builder |
+| `vite` / `@vitejs/plugin-react` | MIT | https://github.com/vitejs/vite |
+| `@liquid-dom/core` | MIT | https://github.com/AndrewPrifer/liquid-dom |

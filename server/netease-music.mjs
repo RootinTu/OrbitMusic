@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  classifyUpstreamError,
+  fetchStreamWithTimeout,
+  fetchWithTimeout,
+} from './http-client.mjs';
 
 const DEFAULT_BITRATE = '320000';
 const ALLOWED_BITRATES = new Set(['128000', '192000', '320000']);
@@ -118,6 +123,18 @@ export function isAllowedNeteaseAudioUrl(rawUrl) {
   }
 }
 
+export function safeNeteaseCoverUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    if (parsed.protocol === 'http:') parsed.protocol = 'https:';
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port) return '';
+    const host = parsed.hostname.toLowerCase();
+    return AUDIO_CDN_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`)) ? parsed.href : '';
+  } catch {
+    return '';
+  }
+}
+
 export function buildNeteaseAudioHeaders(range) {
   const audioHeaders = {
     Accept: '*/*',
@@ -131,7 +148,8 @@ export function buildNeteaseAudioHeaders(range) {
 }
 
 async function json(url, options = {}) {
-  const response = await fetch(url, options);
+  const { timeoutMs = 10000, ...fetchOptions } = options;
+  const response = await fetchWithTimeout(url, fetchOptions, { timeoutMs, label: '网易云音乐' });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.message || `网易云请求失败（${response.status}）`);
   return payload;
@@ -180,8 +198,13 @@ async function songDetails(ids, cookie) {
   return result;
 }
 
-function errorResponse(response, status, message) {
-  response.status(status).json({ error: message, message });
+function errorResponse(response, status, message, code) {
+  response.status(status).json({ error: message, message, ...(code ? { code } : {}) });
+}
+
+function sendClassifiedError(response, error, fallbackMessage) {
+  const info = classifyUpstreamError(error, fallbackMessage, 502);
+  errorResponse(response, info.status, info.message, info.code);
 }
 
 async function streamAudio(request, response, upstream) {
@@ -216,7 +239,7 @@ export function registerNeteaseMusicExpressRoutes(app) {
       const profile = await account();
       if (!profile.loggedIn) return errorResponse(response, 401, '网易云登录态无效或已过期');
       response.json(profile);
-    } catch (error) { errorResponse(response, 502, error.message || '网易云登录信息同步失败'); }
+    } catch (error) { sendClassifiedError(response, error, '网易云登录信息同步失败'); }
   });
 
   app.post('/api/netease/logout', (_request, response) => {
@@ -235,7 +258,7 @@ export function registerNeteaseMusicExpressRoutes(app) {
         method: 'POST', headers: headers(browserCookie, { 'Content-Type': 'application/x-www-form-urlencoded' }), body,
       });
       response.json({ songs: (payload?.result?.songs || []).map(mapNeteaseSong).filter(song => song.id && song.name) });
-    } catch (error) { errorResponse(response, 502, error.message || '网易云搜索失败'); }
+    } catch (error) { sendClassifiedError(response, error, '网易云搜索失败'); }
   });
 
   app.get('/api/netease/user/playlists', async (_request, response) => {
@@ -244,7 +267,7 @@ export function registerNeteaseMusicExpressRoutes(app) {
       if (!profile.loggedIn) return errorResponse(response, 401, '请先扫码登录网易云音乐');
       const payload = await json(`https://music.163.com/api/user/playlist?uid=${encodeURIComponent(profile.userId)}&limit=1000&offset=0`, { headers: headers() });
       response.json({ profile, playlists: (payload?.playlist || []).map(playlistSummary).filter(item => item.id) });
-    } catch (error) { errorResponse(response, 502, error.message || '读取网易云歌单失败'); }
+    } catch (error) { sendClassifiedError(response, error, '读取网易云歌单失败'); }
   });
 
   app.get('/api/netease/playlist/tracks', async (request, response) => {
@@ -264,7 +287,7 @@ export function registerNeteaseMusicExpressRoutes(app) {
         playlist: { ...playlistSummary(playlist), loadedCount: songs.length },
         songs,
       });
-    } catch (error) { errorResponse(response, 502, error.message || '读取网易云歌单歌曲失败'); }
+    } catch (error) { sendClassifiedError(response, error, '读取网易云歌单歌曲失败'); }
   });
 
   app.get('/api/netease/lyric', async (request, response) => {
@@ -274,19 +297,39 @@ export function registerNeteaseMusicExpressRoutes(app) {
       let payload;
       try {
         payload = await json(`https://music.163.com/api/song/lyric/v1?id=${encodeURIComponent(id)}&cp=false&lv=0&tv=0&rv=0&kv=0&yv=0&ytv=0&yrv=0`, {
-          headers: headers(), signal: AbortSignal.timeout(12000),
+          headers: headers(), timeoutMs: 12000,
         });
         if (!payload?.lrc && !payload?.yrc) throw new Error('新版歌词暂不可用');
       } catch {
         payload = await json(`https://music.163.com/api/song/lyric?id=${encodeURIComponent(id)}&lv=-1&kv=-1&tv=-1`, {
-          headers: headers(), signal: AbortSignal.timeout(8000),
+          headers: headers(), timeoutMs: 8000,
         });
       }
       const original = payload?.lrc?.lyric || '';
       const translated = payload?.tlyric?.lyric || '';
       response.json({ provider: 'netease', id, lyric: original, tlyric: translated,
         yrc: payload?.yrc?.lyric || '', ytlyric: payload?.ytlrc?.lyric || '', });
-    } catch (error) { errorResponse(response, 502, error.message || '读取网易云歌词失败'); }
+    } catch (error) { sendClassifiedError(response, error, '读取网易云歌词失败'); }
+  });
+
+  app.get('/api/netease/cover', async (request, response) => {
+    const targetUrl = safeNeteaseCoverUrl(request.query.url);
+    if (!targetUrl) return errorResponse(response, 400, '无效的网易云封面地址');
+    try {
+      const upstream = await fetchWithTimeout(targetUrl, {
+        headers: { Referer: BASE_HEADERS.Referer, 'User-Agent': BASE_HEADERS['User-Agent'] },
+      }, { timeoutMs: 10000, label: '网易云封面' });
+      if (!upstream.ok) return errorResponse(response, upstream.status, '网易云封面加载失败');
+      const contentType = String(upstream.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+      if (!/^image\//i.test(contentType)) return errorResponse(response, 502, '网易云封面返回了非图片内容');
+      response.setHeader('Content-Type', contentType);
+      response.setHeader('Cache-Control', 'private, max-age=86400');
+      const buffer = await upstream.arrayBuffer();
+      response.end(Buffer.from(buffer));
+    } catch (error) {
+      if (!response.headersSent) sendClassifiedError(response, error, '网易云封面代理失败');
+      else if (!response.writableEnded) response.end();
+    }
   });
 
   app.get('/api/netease/audio', async (request, response) => {
@@ -298,11 +341,15 @@ export function registerNeteaseMusicExpressRoutes(app) {
       if (!url) return errorResponse(response, 404, '网易云未返回可播放地址，歌曲可能受会员或版权限制');
       if (!isAllowedNeteaseAudioUrl(url)) return errorResponse(response, 502, '网易云返回了不受信任的音源地址');
       const upstreamHeaders = buildNeteaseAudioHeaders(request.headers.range);
-      const upstream = await fetch(url, { headers: upstreamHeaders });
+      const upstream = await fetchStreamWithTimeout(url, { headers: upstreamHeaders }, {
+        connectTimeoutMs: 15000,
+        label: '网易云音源',
+        clientRequest: request,
+      });
       if (!upstream.ok && upstream.status !== 206) return errorResponse(response, upstream.status, '网易云音源请求失败');
       await streamAudio(request, response, upstream);
     } catch (error) {
-      if (!response.headersSent) errorResponse(response, 502, error.message || '网易云音源代理失败');
+      if (!response.headersSent) sendClassifiedError(response, error, '网易云音源代理失败');
       else if (!response.writableEnded) response.end();
     }
   });

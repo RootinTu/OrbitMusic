@@ -13,6 +13,7 @@
  * 工作区还可能向 EXE 继承 Low 完整性标签，造成 NSIS 临时写入失败或
  * Electron 静默退出。测试时直接运行工作区外的原始产物，不复制回 release/。
  */
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -21,7 +22,32 @@ import { spawn } from 'node:child_process';
 const require = createRequire(import.meta.url);
 const { Arch, build, Platform } = require('electron-builder');
 
-const outputDir = process.env.ORBIT_BUILD_OUTPUT || path.join(os.tmpdir(), 'orbit-build');
+const outputDir = path.resolve(process.env.ORBIT_BUILD_OUTPUT || path.join(os.tmpdir(), 'orbit-build'));
+
+function assertSafeCleanTarget(targetDir) {
+  const resolved = path.resolve(targetDir);
+  const root = path.parse(resolved).root;
+  const home = path.resolve(os.homedir());
+  const cwd = path.resolve(process.cwd());
+  const tmpRoot = path.resolve(os.tmpdir());
+  if (resolved === root || resolved === home || resolved === cwd || resolved === tmpRoot) {
+    throw new Error(`拒绝清理受保护目录：${resolved}`);
+  }
+  const insideTmp = resolved.toLowerCase().startsWith(`${tmpRoot.toLowerCase()}${path.sep}`);
+  const baseName = path.basename(resolved).toLowerCase();
+  if (!insideTmp && !baseName.includes('orbit-build') && !baseName.includes('release')) {
+    throw new Error(`拒绝清理非构建输出目录：${resolved}`);
+  }
+}
+
+function cleanReleaseOutputDir(targetDir) {
+  assertSafeCleanTarget(targetDir);
+  if (existsSync(targetDir)) {
+    console.log(`[release] 清理旧构建产物：${targetDir}`);
+    rmSync(targetDir, { recursive: true, force: true });
+  }
+  mkdirSync(targetDir, { recursive: true });
+}
 
 // electron-builder 只识别 GH_TOKEN/GITHUB_TOKEN；日常 git push 则通常由
 // Windows Git Credential Manager 代管。两边原本互不相通，会出现代码能推送、
@@ -51,6 +77,7 @@ if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
   throw new Error('缺少 GitHub 发布凭据：请先登录 Git Credential Manager 或设置 GH_TOKEN');
 }
 
+cleanReleaseOutputDir(outputDir);
 console.log(`[release] 输出目录（工作区外）：${outputDir}`);
 
 await build({

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar from './MusicAccountAvatar.jsx';
 import { isAbortError } from './asyncSlot.js';
 import { MAX_KUGOU_PLAYLISTS, MAX_KUGOU_TRACKS } from './kugouLibrary.js';
+import { normalizeKugouAccountProfile } from './musicAccounts.js';
 
 const importErrors = {
   empty: '没有可导入的歌曲',
@@ -20,9 +20,10 @@ function Art({ src, title }) {
 }
 
 export default function KugouBridge({
-  open, onImport, onClear, importedCount,
+  open, account, onImport, onClear, importedCount,
   playlists: localPlaylists = [], activePlaylistId = null, onSwitchPlaylist,
 }) {
+  const updateAccount = account?.update;
   const api = window.orbitDesktop;
   const desktop = Boolean(api?.openKugouLogin);
   const [profile, setProfile] = useState(null);
@@ -54,13 +55,15 @@ export default function KugouBridge({
   }, []);
 
   const applySessionResult = useCallback(result => {
-    const nextProfile = result.profile || { nickname: '酷狗用户', avatar: '' };
+    const normalized = normalizeKugouAccountProfile(result);
+    const nextProfile = normalized || result.profile || { nickname: '酷狗用户', avatar: '' };
     const nextList = Array.isArray(result.playlists) ? result.playlists : [];
     setProfile(nextProfile);
     setClientReady(Boolean(result.clientReady));
     setAccountPlaylists(nextList);
     setCollectionError(result.collectionError || '');
-  }, []);
+    updateAccount?.(normalized);
+  }, [updateAccount]);
 
   const run = useCallback(async (action, request, onSuccess, { silentLogin = false, supersede = false } = {}) => {
     if (pending.current && !supersede) return;
@@ -81,6 +84,7 @@ export default function KugouBridge({
         setAccountPlaylists([]);
         setCollectionError('');
         setPreview(null);
+        updateAccount?.(null);
         if (!silentLogin) setNotice('尚未检测到酷狗登录态，请先扫码登录。');
       } else setNotice(result?.message || result?.error || '酷狗请求未完成');
     } catch (error) {
@@ -116,6 +120,7 @@ export default function KugouBridge({
         setAccountPlaylists([]);
         setCollectionError('');
         setPreview(null);
+        updateAccount?.(null);
         setNotice('尚未检测到酷狗登录态，请确认已在官网登录成功。');
       } else if (result?.message) {
         setNotice(result.message);
@@ -267,7 +272,6 @@ export default function KugouBridge({
   return (
     <>
       <div className="bridge-status">
-        <GlassSurface variant="dialog-pane" />
         {profile ? <MusicAccountAvatar profile={profile} /> : <span className="bridge-pulse" />}
         <div>
           <strong title={profile?.nickname || undefined}>{profile ? (profile.nickname || '酷狗音乐账号') : '等待扫码登录'}</strong>
@@ -283,6 +287,7 @@ export default function KugouBridge({
               setAccountPlaylists([]);
               setCollectionError('');
               setPreview(null);
+              updateAccount?.(null);
               setNotice('已退出酷狗账号；此前导入本机的歌单仍保留。');
             });
           }}>退出</BridgeGlassButton>
@@ -293,7 +298,6 @@ export default function KugouBridge({
 
       <div className="bridge-grid">
         <div className="bridge-pane bridge-search">
-          <GlassSurface variant="dialog-pane" />
           <span className="bridge-label">搜索歌曲</span>
           <form onSubmit={searchSongs} className="bridge-input-row">
             <BridgeGlassInput value={songQuery} onChange={event => setSongQuery(event.target.value)} placeholder="歌名、歌手" aria-label="搜索酷狗音乐" />
@@ -312,7 +316,6 @@ export default function KugouBridge({
         </div>
 
         <div className="bridge-pane bridge-library">
-          <GlassSurface variant="dialog-pane" />
           <div className="bridge-pane-title">
             <span className="bridge-label">导入歌单</span>
             <small>每个歌单最多 {MAX_KUGOU_TRACKS} 首</small>

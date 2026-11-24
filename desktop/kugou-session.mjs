@@ -80,7 +80,10 @@ export function normalizeKugouCollectionSong(row) {
     albumId,
     pageId,
     album: String(row.albumName || row.album_name || row.albuminfo?.name || '酷狗音乐').slice(0, 200),
-    cover: safeImage(row.image || row.imgurl || row.album_img || row.cover || row.trans_param?.union_cover),
+    cover: safeImage(
+      row.image || row.imgurl || row.album_img || row.sizable_cover || row.cover
+      || row.albuminfo?.sizable_cover || row.albuminfo?.cover || row.trans_param?.union_cover,
+    ),
     durationMs: Number.isFinite(duration) && duration > 0 ? duration * (duration < 10000 ? 1000 : 1) : 0,
     sourceUrl: kugouSongPage(hash, albumId, pageId),
   };

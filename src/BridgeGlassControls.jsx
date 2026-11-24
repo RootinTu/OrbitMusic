@@ -1,9 +1,6 @@
-import GlassSurface from './GlassSurface.jsx';
-
 export function BridgeGlassButton({ children, className = '', type = 'button', ...props }) {
   return (
-    <button {...props} type={type} className={`liquid-control bridge-glass-button ${className}`}>
-      <GlassSurface variant="dialog-control" />
+    <button {...props} type={type} className={`bridge-glass-button ${className}`}>
       {children}
     </button>
   );
@@ -11,8 +8,7 @@ export function BridgeGlassButton({ children, className = '', type = 'button', .
 
 export function BridgeGlassInput(props) {
   return (
-    <div className="liquid-control bridge-glass-input">
-      <GlassSurface variant="dialog-control" />
+    <div className="bridge-glass-input">
       <input {...props} />
     </div>
   );

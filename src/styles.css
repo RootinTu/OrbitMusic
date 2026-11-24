@@ -124,8 +124,8 @@ input[type=range]:disabled{opacity:.35;cursor:default}
 #journal-view{height:calc(var(--app-vh,100dvh) - 100px - var(--safe-top));overflow:auto;padding:25px 6% 160px}.journal-heading h1{font-size:42px;font-weight:500;line-height:1.4;margin:18px 0}.journal-heading p{font-size:14px;color:#999}.journal-heading{margin-bottom:45px}#journal-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:28px}.journal-card{text-align:left;padding:0}.journal-art{width:100%;aspect-ratio:1.2;border-radius:14px}.journal-card>span:not(.journal-art){display:block;font-size:10px;color:#888;letter-spacing:2px;margin-top:18px}.journal-card h2{font-size:20px;font-weight:500;margin:8px 0}.journal-card p{font-size:13px;line-height:1.8;color:#999;margin:0}.journal-card:hover .journal-art{border-color:#ffffff54;box-shadow:inset 0 1px 0 #ffffff70,0 18px 45px #0008}
 dialog{width:min(760px,90vw);padding:0;border:1px solid #ffffff30;border-radius:24px;background:#232327eb;color:#eee;box-shadow:0 30px 100px #000b;backdrop-filter:blur(40px);overflow:hidden}dialog[open]{display:grid;grid-template-columns:43% 57%}dialog::backdrop{background:#050509aa;backdrop-filter:blur(12px)}.detail-art{width:100%;height:100%;min-height:410px;border:0;border-radius:0}.detail-art .art-image{padding:18px}.detail-copy{padding:52px 34px 35px}.detail-copy h2{font-size:33px;letter-spacing:1px;margin:18px 0}.detail-copy p{font-size:14px;line-height:2;color:#b0b0b9}.detail-meta{font-size:11px;color:#81818b;margin:23px 0}.detail-meta>span+span{margin:0 10px}.detail-meta a{color:#c9c9d0;text-decoration:none}.detail-meta a:hover{color:#fff}.close{position:absolute;right:14px;top:10px;font-size:27px;color:#aaa;z-index:4}.listen{padding:12px 18px;display:flex;align-items:center;gap:20px;border-radius:30px;color:#17171a;background:#f0f0f3;font-size:13px}.listen:hover{color:#000;background:white}.listen svg{width:18px;height:18px}.detail-copy small{display:block;margin-top:15px;font-size:10px;color:#797982}
 #toast{position:fixed;bottom:145px;left:50%;transform:translateX(-50%) translateY(15px);background:#e9e9ed;color:#242429;border-radius:30px;padding:10px 20px;font-size:13px;z-index:300;opacity:0;pointer-events:none;transition:.2s}#toast.show{opacity:1;transform:translateX(-50%)}[hidden]{display:none!important}
-.bridge-backdrop{position:fixed;inset:0;z-index:400;display:grid;place-items:center;padding:30px;background:#05060845;animation:bridge-fade .22s ease-out}
-.qq-bridge{position:relative;width:min(1160px,94vw);height:min(800px,90dvh);border-radius:28px;padding:0;overflow:hidden;display:flex;flex-direction:column;animation:bridge-rise .34s cubic-bezier(.2,.8,.2,1)}
+.bridge-backdrop{position:fixed;inset:0;z-index:400;display:grid;place-items:center;padding:30px;background:rgba(6,7,10,.72);animation:bridge-fade .22s ease-out}
+.qq-bridge{position:relative;width:min(1160px,94vw);height:min(800px,90dvh);border-radius:28px;border:1px solid #ffffff1c;background:linear-gradient(160deg,#1a1c24 0%,#13151b 55%,#101217 100%);box-shadow:0 24px 68px #000a,inset 0 1px 0 #ffffff14;padding:0;overflow:hidden;display:flex;flex-direction:column;animation:bridge-rise .34s cubic-bezier(.2,.8,.2,1)}
 .qq-bridge .bridge-head{height:auto;padding:25px 30px 15px;display:flex;align-items:flex-start;justify-content:space-between;position:relative;z-index:1;background:none;flex:none}
 .bridge-head h2{font-size:clamp(24px,2.5vw,38px);font-weight:500;line-height:1.25;margin:10px 0 0;letter-spacing:.2px}.bridge-close{width:38px;height:38px;border:1px solid #ffffff18;border-radius:50%;font-size:25px;line-height:1;color:#a7a7af;background:#ffffff08}.bridge-close:hover{background:#ffffff15}
 .bridge-status{margin:0 30px 14px;min-height:60px;padding:10px 13px 10px 16px;border:1px solid #ffffff14;border-radius:18px;background:#ffffff08;display:flex;align-items:center;gap:13px;flex:none}.bridge-status>div{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}.bridge-status strong{font-size:13px;font-weight:500}.bridge-status small{font-size:9px;color:#8e8e98;letter-spacing:.3px}.bridge-status>button,.bridge-input-row button{padding:10px 15px;border-radius:12px;background:#ececef;color:#18191d;font-size:11px;font-weight:600;white-space:nowrap}.bridge-status>button:hover,.bridge-input-row button:hover{background:#fff;color:#000}.bridge-status button:disabled,.bridge-input-row button:disabled{opacity:.45;cursor:wait}.bridge-pulse{width:8px;height:8px;border-radius:50%;background:#62636b;box-shadow:0 0 0 6px #ffffff06}.bridge-pulse.online{background:#f1f1f3;box-shadow:0 0 13px #fff,0 0 0 6px #ffffff0c}
@@ -222,7 +222,7 @@ dialog{width:min(760px,90vw);padding:0;border:1px solid #ffffff30;border-radius:
 .orbit-glass-surface::before,.orbit-glass-surface::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;transition:opacity .22s ease}
 .orbit-glass-surface::before{background:radial-gradient(ellipse 88% 28% at 16% 0%,#ffffff75,transparent 70%),radial-gradient(ellipse 72% 24% at 92% 100%,#b8d2ff4d,transparent 74%);opacity:.75}
 .orbit-glass-surface::after{background:linear-gradient(135deg,#ffffff1a 0%,transparent 28% 72%,#d7e7ff18 100%);opacity:.7}
-.orbit-glass-surface:is(.is-control,.is-dialog-control,.is-dialog-pane){--glass-blur:13px;--glass-saturation:1.72;box-shadow:inset 0 0 0 1px #ffffff2b,inset 0 1px 1px #ffffff6e,inset 0 -1px 1px #c3d8ff36,0 10px 24px #0004}
+.orbit-glass-surface.is-control{--glass-blur:13px;--glass-saturation:1.72;box-shadow:inset 0 0 0 1px #ffffff2b,inset 0 1px 1px #ffffff6e,inset 0 -1px 1px #c3d8ff36,0 10px 24px #0004}
 .orbit-glass-surface.is-subtle{--glass-blur:6px;--glass-saturation:1.25;background:linear-gradient(115deg,#ffffff0a,transparent 68%,#e2edff06);box-shadow:inset 0 -1px 0 #ffffff10}
 .is-subtle.orbit-glass-surface::before,.is-subtle.orbit-glass-surface::after{opacity:.3}
 .liquid-control:hover>.orbit-glass-surface:not(.is-liquid-dom){filter:brightness(1.14)}
@@ -304,44 +304,48 @@ nav.liquid-control span,.liquid-control .playlist-toggle-count{color:#b4b8c1}
 html[data-glass-renderer="full-dom"] header{background:none}
 html[data-glass-renderer="full-dom"] :is(.liquid-control,.liquid-panel,.player.refractive-player){box-shadow:none}
 html[data-glass-renderer="full-dom"] button.liquid-control:hover{background:#ffffff0d!important}
-.qq-bridge > .orbit-glass-surface {
-  --glass-blur: 30px;
-  background: linear-gradient(145deg, #bccbe225, #181c225e 42%, #11131994);
-  box-shadow: inset 0 1px 1px #f2f6ff9e, inset 0 0 0 1px #d7e6ff28,
-    inset 0 -1px 1px #b6cafa45, 0 20px 64px #0007;
-}
-.qq-bridge > .orbit-glass-surface.is-liquid-dom {
-  background: linear-gradient(145deg, #abbdd019, #11141b24 46%, #10121642);
-  box-shadow: inset 0 1px 0 #f2f6ff52, inset 0 -1px 1px #becfff2e;
-}
 .qq-bridge :is(.bridge-pane, .bridge-status, .bridge-check) {
   position: relative;
-  isolation: isolate;
-  background: #12172124;
-  border-color: transparent;
+  background: #1a1d26;
+  border: 1px solid #ffffff14;
 }
 .qq-bridge .bridge-library-tabs {
-  background: #10141d38;
-  border-color: #edf3ff17;
-  box-shadow: inset 0 1px 2px #0004;
+  background: #101218;
+  border-color: #ffffff14;
+  box-shadow: inset 0 1px 2px #0005;
 }
 .qq-bridge .bridge-glass-button {
   color: #eef0f4;
+  background: #ffffff12;
+  border: 1px solid #ffffff1c;
   border-radius: 999px;
+  transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
 }
-.qq-bridge .bridge-check-run.liquid-control { position: absolute; }
+.qq-bridge .bridge-glass-button:hover:not(:disabled) {
+  background: #ffffff20;
+  border-color: #ffffff30;
+  color: #fff;
+}
+.qq-bridge .bridge-glass-button:active:not(:disabled) {
+  transform: scale(.97);
+}
+.qq-bridge .bridge-check-run { position: absolute; }
 .qq-bridge .bridge-library-tabs .active,
-.qq-bridge .bridge-clear.armed { background: #ffffff20 !important; color: #fff; }
+.qq-bridge .bridge-clear.armed { background: #ffffff24 !important; border-color: #ffffff38; color: #fff; }
 .bridge-glass-input {
   position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
   border-radius: 999px;
+  background: #101218;
+  border: 1px solid #ffffff1c;
+  transition: border-color .16s ease, background .16s ease;
 }
 .bridge-glass-input:focus-within {
-  outline: 1px solid #dbe7ff80;
-  outline-offset: 2px;
+  border-color: #dbe7ff70;
+  background: #141720;
+  outline: none;
 }
 .bridge-input-row .bridge-glass-input input {
   width: 100%;
@@ -475,6 +479,6 @@ html[data-glass-renderer="full-dom"] button.liquid-control:hover{background:#fff
   .bridge-provider-panel .bridge-library { display: flex; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .qq-bridge > .orbit-glass-surface { background: #292b30; }
+  .qq-bridge { background: #181a20; }
   .qq-bridge :is(.bridge-pane, .bridge-status, .bridge-check) { background: #22252a; }
 }

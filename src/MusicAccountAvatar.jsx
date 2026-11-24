@@ -8,7 +8,7 @@ export default function MusicAccountAvatar({ profile }) {
   const remoteSources = (fromWeChat ? [] : [profile?.avatar, profile?.avatarFallback])
     .filter(value => typeof value === 'string')
     .map(value => value.trim().replace(/^\/\//, 'https://'))
-    .filter(value => /^https?:\/\//i.test(value));
+    .filter(value => /^(?:https?:\/\/|\/api\/)/i.test(value));
   const sources = [...new Set([local, ...remoteSources].filter(Boolean))];
   return <AvatarImage key={JSON.stringify(sources)} sources={sources} fallbackText={fromWeChat ? '微' : ''} />;
 }

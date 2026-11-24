@@ -71,7 +71,9 @@ function toOrbitTrack(song, id) {
     ...song,
     id,
     genre: 'QQ MUSIC',
-    cover: song.cover || (song.albumMid ? `/api/qq/cover?id=${encode(song.albumMid)}&size=500` : ''),
+    cover: song.cover?.startsWith('/api/')
+      ? song.cover
+      : (song.albumMid ? `/api/qq/cover?id=${encode(song.albumMid)}&size=500` : (song.cover || '')),
     src: `/api/qq/audio?${audioQuery}`,
     lyrics: `/api/qq/lyric?${lyricQuery}`,
     sourceUrl: `https://y.qq.com/n/ryqq/songDetail/${encode(song.mid)}`,

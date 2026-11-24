@@ -63,6 +63,14 @@ function removeTracks(library) {
   library.forEach((track, index) => { track.id = index; });
 }
 
+export function proxyKugouCover(rawCover) {
+  const value = String(rawCover || '').trim();
+  if (!value) return '';
+  if (value.startsWith('/api/kugou/cover?')) return value;
+  if (/^https?:\/\//i.test(value)) return `/api/kugou/cover?url=${encodeURIComponent(value)}`;
+  return value;
+}
+
 export function switchKugouPlaylist(library, id) {
   const stored = read();
   const playlist = stored.playlists.find(item => item.id === id);
@@ -73,7 +81,9 @@ export function switchKugouPlaylist(library, id) {
   for (const song of playlist.songs) {
     const durationMs = Math.max(0, Math.round(Number(song.durationMs) || 0));
     library.push({
-      ...song, id: library.length, title: song.name, artist: song.artist || '酷狗音乐', provider: 'kugou',
+      ...song,
+      cover: proxyKugouCover(song.cover),
+      id: library.length, title: song.name, artist: song.artist || '酷狗音乐', provider: 'kugou',
       duration: durationMs / 1000, genre: 'KUGOU MUSIC',
       src: '',
       lyrics: `/api/kugou/lyric?hash=${song.hash}&duration=${durationMs}`,

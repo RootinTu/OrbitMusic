@@ -1,10 +1,12 @@
 // Lyrics, public playlists and public search are public metadata.
 // Account and playback operations are handled in Electron's isolated Kugou session.
+import { classifyUpstreamError, fetchWithTimeout } from './http-client.mjs';
+
 const HASH = /^[a-f0-9]{32}$/i;
 const SPECIAL_ID = /^\d{1,16}$/;
 const KUGOU_API_ORIGIN = 'http://mobilecdnbj.kugou.com';
 
-function safeKugouImage(value) {
+export function safeKugouImage(value) {
   try {
     const url = new URL(String(value || '').replace('{size}', '400'));
     if (url.protocol === 'http:') url.protocol = 'https:';
@@ -64,11 +66,10 @@ async function resolveShortKugouUrl(raw) {
   try {
     const parsed = new URL(match[0]);
     if (!/(?:^|\.)kugou\.com$/i.test(parsed.hostname)) return '';
-    const response = await fetch(parsed.href, {
+    const response = await fetchWithTimeout(parsed.href, {
       method: 'GET',
       redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
-    });
+    }, { timeoutMs: 8000, label: '酷狗音乐' });
     const location = response.headers.get('location') || '';
     return extractKugouSpecialId(location) || extractKugouSpecialId(parsed.href);
   } catch {
@@ -77,20 +78,46 @@ async function resolveShortKugouUrl(raw) {
 }
 
 export function registerKugouMusicExpressRoutes(app) {
+  app.get('/api/kugou/cover', async (req, res) => {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    const targetUrl = safeKugouImage(rawUrl);
+    if (!targetUrl) return res.status(400).json({ error: '无效的酷狗封面地址。' });
+    try {
+      const fetchRes = await fetchWithTimeout(targetUrl, {
+        headers: { Referer: 'https://www.kugou.com/' },
+      }, { timeoutMs: 10000, label: '酷狗封面' });
+      if (!fetchRes.ok) return res.status(fetchRes.status).json({ error: '无法加载酷狗封面。' });
+      const contentType = String(fetchRes.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
+      if (!/^image\//i.test(contentType)) return res.status(502).json({ error: '酷狗封面返回了非图片内容。' });
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      const buffer = await fetchRes.arrayBuffer();
+      res.end(Buffer.from(buffer));
+    } catch (error) {
+      if (!res.destroyed) {
+        const info = classifyUpstreamError(error, '暂时无法加载酷狗封面。');
+        res.status(info.status).json({ error: info.message, message: info.message, code: info.code });
+      }
+    }
+  });
+
   app.get('/api/kugou/lyric', async (req, res) => {
     const hash = typeof req.query.hash === 'string' ? req.query.hash.trim() : '';
     if (!HASH.test(hash)) return res.status(400).json({ error: '无效的酷狗歌曲编号。' });
     const duration = typeof req.query.duration === 'string' ? req.query.duration : '';
     const parameters = new URLSearchParams({ cmd: '100', hash, timelength: /^\d{1,9}$/.test(duration) ? duration : '0' });
     try {
-      const response = await fetch(`https://m.kugou.com/app/i/krc.php?${parameters}`, {
-        signal: AbortSignal.timeout(10000), redirect: 'error',
-      });
+      const response = await fetchWithTimeout(`https://m.kugou.com/app/i/krc.php?${parameters}`, {
+        redirect: 'error',
+      }, { timeoutMs: 10000, label: '酷狗歌词' });
       if (!response.ok) throw new Error('Kugou lyrics unavailable');
       const text = await response.text();
       res.type('text/plain').send(/^\s*\[\d+:\d+/m.test(text) ? text : '');
-    } catch {
-      if (!res.destroyed) res.status(502).json({ error: '暂时无法加载酷狗歌词。' });
+    } catch (error) {
+      if (!res.destroyed) {
+        const info = classifyUpstreamError(error, '暂时无法加载酷狗歌词。');
+        res.status(info.status).json({ error: info.message, message: info.message, code: info.code });
+      }
     }
   });
 
@@ -105,8 +132,9 @@ export function registerKugouMusicExpressRoutes(app) {
     }
     try {
       const params = new URLSearchParams({ specialid: specialId, page: '1', pagesize: '30', plat: '0' });
-      const response = await fetch(`${KUGOU_API_ORIGIN}/api/v3/special/song?${params}`, {
-        signal: AbortSignal.timeout(10000),
+      const response = await fetchWithTimeout(`${KUGOU_API_ORIGIN}/api/v3/special/song?${params}`, {}, {
+        timeoutMs: 10000,
+        label: '酷狗歌单',
       });
       if (!response.ok) throw new Error('Kugou playlist unavailable');
       const payload = await response.json();
@@ -114,8 +142,11 @@ export function registerKugouMusicExpressRoutes(app) {
       const songs = [...new Map(rows.map(normalizePublicSong).filter(Boolean).map(song => [song.hash, song])).values()];
       if (!songs.length) return res.status(404).json({ error: '该酷狗歌单里没有可读取的歌曲。' });
       res.json({ ok: true, id: `special:${specialId}`, name: customName || `酷狗歌单 ${specialId}`, songs });
-    } catch {
-      if (!res.destroyed) res.status(502).json({ error: '暂时无法读取酷狗公开歌单，请稍后再试。' });
+    } catch (error) {
+      if (!res.destroyed) {
+        const info = classifyUpstreamError(error, '暂时无法读取酷狗公开歌单，请稍后再试。');
+        res.status(info.status).json({ error: info.message, message: info.message, code: info.code });
+      }
     }
   });
 
@@ -126,8 +157,9 @@ export function registerKugouMusicExpressRoutes(app) {
     try {
       const endpoint = type === 'playlist' ? '/api/v3/search/special' : '/api/v3/search/song';
       const params = new URLSearchParams({ keyword: q, page: '1', pagesize: type === 'playlist' ? '15' : '30' });
-      const response = await fetch(`${KUGOU_API_ORIGIN}${endpoint}?${params}`, {
-        signal: AbortSignal.timeout(10000),
+      const response = await fetchWithTimeout(`${KUGOU_API_ORIGIN}${endpoint}?${params}`, {}, {
+        timeoutMs: 10000,
+        label: '酷狗搜索',
       });
       if (!response.ok) throw new Error('Kugou search unavailable');
       const payload = await response.json();
@@ -150,8 +182,11 @@ export function registerKugouMusicExpressRoutes(app) {
         const songs = [...new Map(rows.map(normalizePublicSong).filter(Boolean).map(song => [song.hash, song])).values()];
         res.json({ ok: true, songs });
       }
-    } catch {
-      if (!res.destroyed) res.status(502).json({ error: '暂时无法搜索酷狗曲库，请稍后再试。' });
+    } catch (error) {
+      if (!res.destroyed) {
+        const info = classifyUpstreamError(error, '暂时无法搜索酷狗曲库，请稍后再试。');
+        res.status(info.status).json({ error: info.message, message: info.message, code: info.code });
+      }
     }
   });
 }

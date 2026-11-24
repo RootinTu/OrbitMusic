@@ -1,9 +1,30 @@
-import { decodeQQCloudLyrics } from './qq-lyrics-codec.mjs';
+import {
+  classifyUpstreamError,
+  fetchStreamWithTimeout,
+  fetchWithTimeout,
+} from './http-client.mjs';
+import {
+  currentCookie,
+  currentQQProfile,
+  getQQCookie,
+  inspectQQAuth,
+  normalizeQQCookieInput,
+  normalizeQQProfile,
+  qqCookieMusicKey,
+  qqCookieObject,
+  qqCookiePlaybackKey,
+  qqCookiePlaybackKeyName,
+  qqCookieUin,
+  qqGtk,
+  refreshQQProfile,
+  setQQCookie,
+} from './qq-auth.mjs';
+import { fetchQQLyric } from './qq-lyrics.mjs';
 
-const QQ_COOKIE_HEADER = 'x-qq-music-cookie';
+export { inspectQQAuth, normalizeQQCookieInput };
+
 const QQ_MUSICU_URL = 'https://u.y.qq.com/cgi-bin/musicu.fcg';
 const QQ_SMARTBOX_URL = 'https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg';
-const QQ_AVATAR_URL = 'https://q.qlogo.cn/headimg_dl';
 const QQ_DEFAULT_PLAYLIST_TRACK_LIMIT = 500;
 const QQ_MAX_PLAYLIST_TRACK_LIMIT = 2000;
 const QQ_PLAYLIST_LIST_LIMIT = 1000;
@@ -21,288 +42,15 @@ const QQ_QUALITY_CANDIDATES = [
   { prefix: 'C400', ext: '.m4a', level: 'aac', label: 'AAC/M4A' },
 ];
 
-let qqCookie = '';
-let qqProfileSession = null;
-
-function parseCookieString(cookieText) {
-  const out = {};
-  String(cookieText || '').split(/[;\n\r]+/).forEach((part) => {
-    const raw = String(part || '').trim();
-    if (!raw) return;
-    const index = raw.indexOf('=');
-    if (index <= 0) return;
-    const key = raw.slice(0, index).trim();
-    const value = raw.slice(index + 1).trim().replace(/;+$/, '');
-    if (key && value) out[key] = value;
-  });
-  return out;
-}
-
-function serializeCookieObject(cookie) {
-  return Object.entries(cookie || {})
-    .filter(([key, value]) => key && value != null && String(value) !== '')
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join('; ');
-}
-
-function normalizeQQUin(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  return digits.replace(/^0+/, '') || digits;
-}
-
-export function normalizeQQCookieInput(cookieText) {
-  const cookie = parseCookieString(cookieText);
-  if (Number(cookie.login_type) === 2 && cookie.wxuin && !cookie.uin) cookie.uin = cookie.wxuin;
-  if (!cookie.uin && (cookie.qqmusic_uin || cookie.p_uin)) cookie.uin = cookie.qqmusic_uin || cookie.p_uin;
-  if (cookie.uin) cookie.uin = normalizeQQUin(cookie.uin);
-  return serializeCookieObject(cookie);
-}
-
-function qqCookieObject(cookieText = qqCookie) {
-  return parseCookieString(normalizeQQCookieInput(cookieText));
-}
-
-function qqCookieUin(cookie = qqCookieObject()) {
-  const raw = Number(cookie.login_type) === 2
-    ? (cookie.wxuin || cookie.uin || cookie.p_uin)
-    : (cookie.uin || cookie.qqmusic_uin || cookie.wxuin || cookie.p_uin);
-  return normalizeQQUin(raw);
-}
-
-function qqCookieMusicKey(cookie = qqCookieObject()) {
-  return cookie.qm_keyst
-    || cookie.qqmusic_key
-    || cookie.music_key
-    || cookie.p_skey
-    || cookie.skey
-    || cookie.psrf_qqaccess_token
-    || cookie.psrf_qqrefresh_token
-    || cookie.wxrefresh_token
-    || cookie.wxskey
-    || '';
-}
-
-function qqCookiePlaybackKey(cookie = qqCookieObject()) {
-  return cookie.qm_keyst || cookie.qqmusic_key || cookie.music_key || cookie.wxskey || '';
-}
-
-function qqCookiePlaybackKeyName(cookie = qqCookieObject()) {
-  return ['qm_keyst', 'qqmusic_key', 'music_key', 'wxskey'].find((key) => cookie[key]) || '';
-}
-
-export function inspectQQAuth(cookieText = qqCookie) {
-  const cookie = qqCookieObject(cookieText);
-  const userId = qqCookieUin(cookie);
-  const accountKey = qqCookieMusicKey(cookie);
-  const playbackKey = qqCookiePlaybackKey(cookie);
-  return {
-    userId,
-    accountReady: Boolean(userId && accountKey),
-    playbackReady: Boolean(userId && playbackKey),
-    playbackKeyName: qqCookiePlaybackKeyName(cookie),
-  };
-}
-
-function decodeCookieValue(value) {
-  try {
-    return decodeURIComponent(String(value || '').replace(/\+/g, '%20')).trim();
-  } catch {
-    return String(value || '').trim();
-  }
-}
-
-function qqCookieNickname(cookie, uin) {
-  const padded = uin ? `0${uin}` : '';
-  const keys = [
-    uin && `ptnick_${uin}`,
-    padded && `ptnick_${padded}`,
-    'ptnick',
-    'nick',
-    'nickname',
-    'qq_nickname',
-  ].filter(Boolean);
-  for (const key of keys) {
-    if (cookie[key]) return decodeCookieValue(cookie[key]);
-  }
-  return '';
-}
-
-const firstText = values => values.find(value => typeof value === 'string' && value.trim())?.trim() || '';
-
-function qqProfileAvatar(info) {
-  const values = [info?.Avatar, info?.avatar, info?.avatarUrl, info?.avatar_url, info?.HeadUrl,
-    info?.headurl, info?.headUrl, info?.headPic, info?.headpic, info?.headPicUrl, info?.headimgurl, info?.picurl];
-  for (const value of values) {
-    if (typeof value !== 'string') continue;
-    try {
-      const raw = value.trim();
-      const url = new URL(raw.startsWith('//') ? `https:${raw}` : raw);
-      if (url.protocol === 'https:' && !url.username && !url.password) return url.href;
-    } catch { /* An empty field or a provider image ID is not an avatar URL. */ }
-  }
-  return '';
-}
-
-function qqProfileName(info) {
-  return firstText([info?.nick, info?.nickname, info?.NickName, info?.Name]);
-}
-
-function setQQCookie(cookieText) {
-  qqCookie = normalizeQQCookieInput(cookieText);
-  const cookie = qqCookieObject();
-  const playbackKey = qqCookiePlaybackKey(cookie);
-  const userId = qqCookieUin(cookie);
-  if (!playbackKey || !userId) {
-    qqProfileSession = null;
-    return;
-  }
-  const identity = JSON.stringify([cookie.login_type, userId, playbackKey, cookie.eas_sid]);
-  if (qqProfileSession?.identity !== identity) {
-    qqProfileSession = { identity, details: null, expiresAt: 0, pending: null };
-  }
-}
-
-function readHeaderCookie(req) {
-  const raw = req.headers?.[QQ_COOKIE_HEADER];
-  return normalizeQQCookieInput(Array.isArray(raw) ? raw[0] : raw);
-}
-
-function currentCookie(req) {
-  return readHeaderCookie(req) || qqCookie;
-}
-
-function qqGtk(cookieText = qqCookie) {
-  const cookie = qqCookieObject(cookieText);
-  const key = cookie.skey || cookie.p_skey || cookie.qqmusic_key || cookie.qm_keyst || '';
-  let hash = 5381;
-  for (let index = 0; index < key.length; index += 1) hash += (hash << 5) + key.charCodeAt(index);
-  return hash & 0x7fffffff;
-}
-
-function normalizeQQProfile(cookieText = qqCookie) {
-  const cookie = qqCookieObject(cookieText);
-  const userId = qqCookieUin(cookie);
-  const musicKey = qqCookieMusicKey(cookie);
-  const playbackKey = qqCookiePlaybackKey(cookie);
-  const nickname = qqCookieNickname(cookie, userId);
-  const loginMethod = Number(cookie.login_type) === 2 ? 'wechat' : 'qq';
-  const qqNumber = cookie.uin;
-  const avatar = loginMethod === 'qq' && playbackKey && /^[1-9]\d*$/.test(qqNumber)
-    ? `${QQ_AVATAR_URL}?dst_uin=${qqNumber}&spec=640`
-    : '';
-  return {
-    provider: 'qq',
-    loggedIn: Boolean(userId && playbackKey),
-    accountLoggedIn: Boolean(userId && musicKey),
-    userId,
-    nickname: nickname || (loginMethod === 'qq' && userId ? `QQ ${userId}` : 'QQ 音乐'),
-    nicknameAvailable: Boolean(nickname),
-    loginMethod,
-    avatar,
-    hasCookie: Boolean(cookieText),
-    playbackKeyReady: Boolean(userId && playbackKey),
-    playbackKeyName: qqCookiePlaybackKeyName(cookie),
-  };
-}
-
-function currentQQProfile() {
-  const profile = normalizeQQProfile();
-  const details = qqProfileSession?.details;
-  if (!details) return profile;
-  return {
-    ...profile,
-    nickname: details.nickname || profile.nickname,
-    nicknameAvailable: Boolean(details.nickname) || profile.nicknameAvailable,
-    avatar: profile.avatar || details.avatar || '',
-    avatarFallback: profile.avatar && details.avatar !== profile.avatar ? details.avatar || '' : '',
-  };
-}
-
-async function refreshQQProfile() {
-  const session = qqProfileSession;
-  if (!session || session.expiresAt > Date.now()) return currentQQProfile();
-  if (!session.pending) {
-    session.pending = loadQQMusicProfile(qqCookie).then(({ nickname, avatar }) => {
-      if (nickname || avatar) {
-        session.details = {
-          nickname: nickname || session.details?.nickname,
-          avatar: avatar || session.details?.avatar,
-        };
-      }
-      session.expiresAt = Date.now() + (nickname && avatar ? 15 * 60_000 : 60_000);
-    }).catch(() => {
-      session.expiresAt = Date.now() + 30_000;
-    }).finally(() => { session.pending = null; });
-  }
-  await session.pending;
-  return currentQQProfile();
-}
-
-async function loadQQMusicProfile(cookieText) {
-  const cookie = qqCookieObject(cookieText);
-  const userId = qqCookieUin(cookie);
-  const comm = { uin: Number(userId), ct: 24, cv: 0, format: 'json' };
-  const options = { signal: AbortSignal.timeout(4500), redirect: 'error' };
-  const request = methods => qqMusicRequest({ comm, ...methods }, cookieText, true, options);
-  const serviceData = service => service?.code === 0 ? service.data : null;
-
-  const self = await request({
-    account: { module: 'music.UserInfo.userInfoServer', method: 'GetLoginUserInfo', param: {} },
-    legacy: { module: 'QQMusic.UserLoginServer', method: 'GetUserInfo', param: {} },
-  }).catch(() => ({}));
-  const account = serviceData(self.account)?.info;
-  const legacy = serviceData(self.legacy);
-  let nickname = qqProfileName(account) || qqProfileName(legacy);
-  let avatar = qqProfileAvatar(account) || qqProfileAvatar(legacy);
-  const encryptedUin = firstText([account?.EncryptedUin, account?.encryptUin, account?.encuin,
-    legacy?.encryptUin, legacy?.encuin, cookie.encrypt_uin, cookie.encryptUin, cookie.euin]);
-  if (encryptedUin && !/^\d+$/.test(encryptedUin)) {
-    // The music profile may use a different avatar from the login account.
-    const { homepage } = await request({
-      homepage: {
-        module: 'music.UnifiedHomepage.UnifiedHomepageSrv', method: 'GetHomepageHeader',
-        param: { uin: encryptedUin, IsQueryTabDetail: 1 },
-      },
-    }).catch(() => ({}));
-    const base = serviceData(homepage)?.Info?.BaseInfo;
-    if (base?.EncryptedUin === encryptedUin) {
-      nickname = qqProfileName(base) || nickname;
-      avatar = qqProfileAvatar(base) || avatar;
-    }
-  }
-  if (!avatar) {
-    const [{ created }, home] = await Promise.all([
-      request({
-        created: { module: 'music.musicasset.PlaylistBaseRead', method: 'GetPlaylistByUin', param: { uin: userId } },
-      }).catch(() => ({})),
-      Number(cookie.login_type) === 2 ? null : qqGetJSON('https://c.y.qq.com/rsc/fcgi-bin/fcg_get_profile_homepage.fcg', {
-        cid: 205360838, reqfrom: 1, userid: userId, format: 'json', g_tk: qqGtk(cookieText),
-      }, cookieText, { ...options, headers: { Referer: 'https://y.qq.com/n/ryqq/profile' } }).catch(() => null),
-    ]);
-    const profile = home?.code === 0 ? home.data?.profile : null;
-    if (profile && (!profile.uin || normalizeQQUin(profile.uin) === userId)) {
-      avatar = qqProfileAvatar(profile);
-      nickname ||= qqProfileName(profile);
-    }
-    const playlists = serviceData(created)?.v_playlist;
-    if (!avatar && Array.isArray(playlists)) {
-      // Use only the owner avatar of this account's own playlists.
-      const owner = playlists.find(item => String(item?.uin) === userId && qqProfileAvatar({ avatar: item.avatar }));
-      avatar = qqProfileAvatar({ avatar: owner?.avatar });
-      nickname ||= qqProfileName(owner);
-    }
-  }
-  return { nickname, avatar };
-}
-
 async function fetchText(targetUrl, options = {}) {
-  const response = await fetch(targetUrl, {
-    ...options,
+  const { timeoutMs = 10000, ...fetchOptions } = options;
+  const response = await fetchWithTimeout(targetUrl, {
+    ...fetchOptions,
     headers: {
       ...QQ_HEADERS,
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     },
-  });
+  }, { timeoutMs, label: 'QQ 音乐' });
   const text = await response.text();
   if (!response.ok) {
     const error = new Error(`HTTP ${response.status}`);
@@ -470,7 +218,7 @@ export function normalizeQQPlaylistTrackLimit(limit) {
   return Math.max(1, Math.min(Math.floor(value), QQ_MAX_PLAYLIST_TRACK_LIMIT));
 }
 
-async function qqGetJSON(targetUrl, params = {}, cookieText = qqCookie, options = {}) {
+async function qqGetJSON(targetUrl, params = {}, cookieText = getQQCookie(), options = {}) {
   const url = new URL(targetUrl);
   Object.entries(params || {}).forEach(([key, value]) => {
     if (value != null) url.searchParams.set(key, String(value));
@@ -481,7 +229,7 @@ async function qqGetJSON(targetUrl, params = {}, cookieText = qqCookie, options 
   return parseJSONText(text);
 }
 
-async function handleQQUserPlaylists(cookieText = qqCookie) {
+async function handleQQUserPlaylists(cookieText = getQQCookie()) {
   const profile = normalizeQQProfile(cookieText);
   if (!profile.loggedIn || !profile.userId) return { loggedIn: false, provider: 'qq', playlists: [] };
   const uin = profile.userId;
@@ -633,7 +381,7 @@ async function fetchQQPlaylistTracksByMusicu(playlistId, trackLimit, cookieText,
   return Array.isArray(songlist) ? songlist : [];
 }
 
-async function handleQQPlaylistTracks(id, limit = 50, cookieText = qqCookie) {
+async function handleQQPlaylistTracks(id, limit = 50, cookieText = getQQCookie()) {
   const profile = normalizeQQProfile(cookieText);
   if (!profile.loggedIn || !profile.userId) return { loggedIn: false, provider: 'qq', songs: [], tracks: [] };
   const playlistId = String(id || '').trim();
@@ -748,7 +496,7 @@ export function qualityCandidatesFrom(target) {
   return QQ_QUALITY_CANDIDATES.slice(index);
 }
 
-async function handleQQSongUrl(mid, mediaMid, qualityPreference, cookieText = qqCookie) {
+async function handleQQSongUrl(mid, mediaMid, qualityPreference, cookieText = getQQCookie()) {
   const songmid = String(mid || '').trim();
   if (!songmid) return { provider: 'qq', url: '', playable: false, error: 'MISSING_MID' };
 
@@ -844,7 +592,7 @@ async function handleQQSongUrl(mid, mediaMid, qualityPreference, cookieText = qq
 //   fee=1 且拿不到地址 → QQ 不认这个登录态的会员权限（最可能是登错号）
 //   fee=0 且拿不到地址 → 我们这条取地址链路有问题
 //   fee=1 但拿到了完整地址 → 会员是生效的
-async function handleQQPlaybackSelfCheck(mid, mediaMid, cookieText = qqCookie) {
+async function handleQQPlaybackSelfCheck(mid, mediaMid, cookieText = getQQCookie()) {
   const cookie = qqCookieObject(cookieText);
   const userId = qqCookieUin(cookie);
   const musicKey = qqCookieMusicKey(cookie);
@@ -894,70 +642,8 @@ async function handleQQPlaybackSelfCheck(mid, mediaMid, cookieText = qqCookie) {
   };
 }
 
-function decodeHtmlEntities(text) {
-  return String(text || '')
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&nbsp;/g, ' ');
-}
-
-function decodeQQLyricText(text) {
-  let raw = String(text || '').trim();
-  if (raw.includes('LyricContent')) return raw;
-  raw = decodeHtmlEntities(raw);
-  const compact = raw.replace(/\s+/g, '');
-  const looksBase64 = compact.length >= 8 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
-  if (looksBase64 && !/^[\da-f]+$/i.test(compact) && !/^\s*\[/.test(raw)) {
-    try {
-      raw = Buffer.from(compact, 'base64').toString('utf8').replace(/^\uFEFF/, '');
-    } catch {
-      // Keep the original response when it is not actually base64.
-    }
-  }
-  raw = decodeQQCloudLyrics(raw);
-  return (raw.includes('LyricContent') ? raw : decodeHtmlEntities(raw)).replace(/\r\n/g, '\n').trim();
-}
-
-export async function handleQQLyric(mid, id, cookieText = qqCookie) {
-  const songMID = String(mid || '').trim();
-  const songID = Number(String(id || '').replace(/\D/g, '')) || 0;
-  if (!songMID && !songID) return { provider: 'qq', error: 'Missing QQ song mid or id', lyric: '' };
-
-  const param = {
-    crypt: 1, lrc_t: 0, qrc_t: 0, trans: 1, trans_t: 0,
-    roma: 0, roma_t: 0, type: 1,
-  };
-  if (songMID) param.songMid = songMID;
-  else param.songId = songID;
-  const request = qrc => ({
-    module: 'music.musichallSong.PlayLyricInfo',
-    method: 'GetPlayLyricInfo', param: { ...param, qrc },
-  });
-  const data = await qqMusicRequest({
-    comm: { ct: 24, cv: 4747474 },
-    lyric: request(0),
-    wordLyric: request(1),
-  }, cookieText, true);
-  const lyricData = data?.lyric?.data || {};
-  const wordData = data?.wordLyric?.data || {};
-  if (!data?.lyric?.data && !data?.wordLyric?.data) throw new Error('QQ 音乐暂未返回歌词数据');
-  const decode = raw => {
-    try { return decodeQQLyricText(raw); }
-    catch { return ''; } // A damaged QRC must not suppress an available LRC.
-  };
-  return {
-    provider: 'qq',
-    id: songID || '',
-    mid: songMID,
-    lyric: decode(lyricData.lyric),
-    tlyric: decode(lyricData.trans || wordData.trans),
-    qrc: decode(wordData.lyric || lyricData.qrc),
-  };
+export async function handleQQLyric(mid, id, cookieText = getQQCookie()) {
+  return fetchQQLyric(mid, id, cookieText, { qqMusicRequest });
 }
 
 async function readRequestJson(req) {
@@ -993,7 +679,11 @@ function audioContentType(audioUrl, upstreamType) {
 async function streamAudio(req, res, audioUrl, range) {
   const headers = { 'User-Agent': UA, Referer: 'https://y.qq.com/' };
   if (range) headers.Range = range;
-  const audioResponse = await fetch(audioUrl, { headers });
+  const audioResponse = await fetchStreamWithTimeout(audioUrl, { headers }, {
+    connectTimeoutMs: 15000,
+    label: 'QQ 音乐音源',
+    clientRequest: req,
+  });
   res.statusCode = audioResponse.status;
   ['content-length', 'content-range', 'accept-ranges'].forEach((header) => {
     const value = audioResponse.headers.get(header);
@@ -1040,7 +730,7 @@ async function handleRoute(req, res, parsedUrl, writeJson = writeJsonResponse) {
   const pathname = parsedUrl.pathname;
   try {
     if (pathname === '/api/qq/login/status') {
-      writeJson(res, 200, await refreshQQProfile());
+      writeJson(res, 200, await refreshQQProfile({ qqMusicRequest, qqGetJSON }));
       return true;
     }
 
@@ -1129,9 +819,9 @@ async function handleRoute(req, res, parsedUrl, writeJson = writeJsonResponse) {
         return true;
       }
       const targetUrl = rawQQAlbumCover(albumMid, size);
-      const fetchRes = await fetch(targetUrl, {
+      const fetchRes = await fetchWithTimeout(targetUrl, {
         headers: { 'Referer': 'https://y.qq.com/' }
-      });
+      }, { timeoutMs: 10000, label: 'QQ 音乐封面' });
       if (!fetchRes.ok) throw new Error('Proxy cover failed');
       res.setHeader('Content-Type', fetchRes.headers.get('content-type') || 'image/jpeg');
       res.setHeader('Cache-Control', 'private, max-age=86400');
@@ -1157,7 +847,12 @@ async function handleRoute(req, res, parsedUrl, writeJson = writeJsonResponse) {
       return true;
     }
   } catch (error) {
-    writeJson(res, 500, { provider: 'qq', error: error.message || 'QQ Music request failed' });
+    if (!res.headersSent) {
+      const info = classifyUpstreamError(error, 'QQ 音乐请求失败', 502);
+      writeJson(res, info.status, { provider: 'qq', error: info.message, message: info.message, code: info.code });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
     return true;
   }
 

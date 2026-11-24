@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar, { MusicAccountAvatarPicker } from './MusicAccountAvatar.jsx';
 import { createAsyncSlot, isAbortError } from './asyncSlot.js';
@@ -372,7 +371,6 @@ export default function QQBridge({
   return (
       <>
         <div className="bridge-status">
-          <GlassSurface variant="dialog-pane" />
           {profile ? <MusicAccountAvatar profile={profile} /> : <span className="bridge-pulse" />}
           <div>
             <strong title={statusText}>{statusText}</strong>
@@ -391,7 +389,6 @@ export default function QQBridge({
 
         {profile && (
           <div className={`bridge-check ${checkOpen ? 'open' : ''}`}>
-            <GlassSurface variant="dialog-pane" />
             <button className="bridge-check-toggle" onClick={() => setCheckOpen(value => !value)} aria-expanded={checkOpen}>
               <span><strong>播放权限自检</strong><small>用当前歌单的歌问 QQ：要不要付费、给不给地址</small></span>
               <b>{checkRows.length ? `${checkRows.length} 首` : '按需检查'}</b>
@@ -419,7 +416,6 @@ export default function QQBridge({
 
         <div className="bridge-grid">
           <div className="bridge-pane bridge-search">
-            <GlassSurface variant="dialog-pane" />
             <span className="bridge-label">搜索歌曲</span>
             <form onSubmit={search} className="bridge-input-row">
               <BridgeGlassInput value={query} onChange={event => setQuery(event.target.value)} placeholder="歌名、歌手" aria-label="搜索 QQ 音乐" />
@@ -438,7 +434,6 @@ export default function QQBridge({
           </div>
 
           <div className="bridge-pane bridge-library">
-            <GlassSurface variant="dialog-pane" />
             <div className="bridge-pane-title">
               <span className="bridge-label">导入歌单</span>
               <small>每个歌单最多 {MAX_QQ_IMPORTS} 首</small>

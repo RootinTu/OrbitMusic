@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAudioPrefetcher } from './boundedCache.js';
 import { createAsyncSlot, isAbortError } from './asyncSlot.js';
 import { createTerrainGL } from './terrainGL.js';
+import { createGlassFrameScheduler } from './glassFrameScheduler.js';
 
 test('audio prefetcher bounds probe count and releases evicted and cleared probes', () => {
   const created = [];
@@ -118,4 +119,35 @@ test('terrainGL dispose releases all buffers, shaders, VAO, program, and optiona
   assert.equal(dropContext.deletedBuffers, 4);
   assert.equal(dropContext.deletedShaders, 2);
   assert.equal(dropContext.lostContexts, 1);
+});
+
+test('glass frame scheduler throttles idle frames, pauses when occluded, and wakes on activity', () => {
+  const scheduler = createGlassFrameScheduler({ idleIntervalMs: 125, interactionGraceMs: 500 });
+
+  // Initial frame renders immediately even when idle
+  assert.equal(scheduler.shouldRender(100, { active: false, initialized: false }), true);
+  scheduler.markRendered(100);
+
+  // While active (playing), renders every frame
+  assert.equal(scheduler.shouldRender(116, { active: true, initialized: true }), true);
+  scheduler.markRendered(116);
+
+  // Idle beyond interaction grace: skips intermediate 16ms frames until 125ms elapsed
+  assert.equal(scheduler.shouldRender(132, { active: false, initialized: true }), false);
+  assert.equal(scheduler.shouldRender(200, { active: false, initialized: true }), false);
+  assert.equal(scheduler.shouldRender(245, { active: false, initialized: true }), true);
+  scheduler.markRendered(245);
+
+  // User interaction wakes full-rate rendering during grace window
+  scheduler.markActivity(260);
+  assert.equal(scheduler.shouldRender(276, { active: false, initialized: true }), true);
+  scheduler.markRendered(276);
+
+  // Modal occlusion (paused) halts redraws once clean and initialized
+  assert.equal(scheduler.shouldRender(900, { active: true, paused: true, initialized: true }), false);
+  // Structural surface change triggers one sync render even if paused, then halts again
+  scheduler.markDirty(910);
+  assert.equal(scheduler.shouldRender(920, { active: false, paused: true, initialized: true }), true);
+  scheduler.markRendered(920);
+  assert.equal(scheduler.shouldRender(1200, { active: false, paused: true, initialized: true }), false);
 });

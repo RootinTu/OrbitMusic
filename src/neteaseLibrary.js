@@ -21,9 +21,18 @@ function normalizeSong(song) {
   };
 }
 
+function proxyNeteaseCover(rawCover) {
+  const value = String(rawCover || '').trim();
+  if (!value) return '';
+  if (value.startsWith('/api/netease/cover?')) return value;
+  if (/^https?:\/\//i.test(value)) return `/api/netease/cover?url=${encodeURIComponent(value)}`;
+  return value;
+}
+
 function toTrack(song, id) {
   return {
     ...song, id, genre: 'NETEASE',
+    cover: proxyNeteaseCover(song.cover),
     src: `/api/netease/audio?id=${encode(song.cloudId)}&br=320000`,
     lyrics: `/api/netease/lyric?id=${encode(song.cloudId)}`,
     sourceUrl: `https://music.163.com/#/song?id=${encode(song.cloudId)}`,

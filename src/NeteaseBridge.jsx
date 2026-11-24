@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import GlassSurface from './GlassSurface.jsx';
 import { BridgeGlassButton, BridgeGlassInput } from './BridgeGlassControls.jsx';
 import MusicAccountAvatar from './MusicAccountAvatar.jsx';
 import { createAsyncSlot, isAbortError } from './asyncSlot.js';
@@ -160,14 +159,12 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
   return (
       <>
         <div className="bridge-status">
-          <GlassSurface variant="dialog-pane" />
           {profile ? <MusicAccountAvatar profile={profile} /> : <span className="bridge-pulse" />}
           <div><strong title={profile ? musicAccountName(profile, 'netease') : undefined}>{profile ? musicAccountName(profile, 'netease') : '等待扫码登录'}</strong><small>{profile ? '已登录网易云音乐' : '扫码后可读取账号歌单'}</small></div>
           <BridgeGlassButton onClick={profile ? logout : login} disabled={Boolean(busy)}>{busy === 'login' ? '等待扫码…' : profile ? '退出登录' : '扫码登录'}</BridgeGlassButton>
         </div>
         <div className="bridge-grid">
           <div className="bridge-pane">
-            <GlassSurface variant="dialog-pane" />
             <span className="bridge-label">搜索网易云</span>
             <form className="bridge-input-row" onSubmit={search}>
               <BridgeGlassInput value={query} onChange={event => setQuery(event.target.value)} placeholder="歌曲 / 歌手 / 专辑" aria-label="搜索网易云音乐" />
@@ -183,7 +180,6 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
             </div>
           </div>
           <div className="bridge-pane bridge-library">
-            <GlassSurface variant="dialog-pane" />
             {preview ? <>
               <div className="bridge-preview-head"><BridgeGlassButton className="bridge-preview-back" onClick={closePreview} aria-label="返回歌单列表">←</BridgeGlassButton><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
               <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><BridgeGlassButton onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 30 首</BridgeGlassButton><BridgeGlassButton onClick={() => setSelected(new Set())}>清空</BridgeGlassButton></div>
