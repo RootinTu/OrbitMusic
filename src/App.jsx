@@ -24,6 +24,12 @@ import { BeatEngine } from './beatEngine.js';
 import { applySink, listOutputs, readBeatOffset, readOutputPref, requestDeviceLabels, saveBeatOffset, saveOutputPref } from './audioOut.js';
 import { clearProviderPlayback, forgetPlaylistPlayback, playbackTrackKey, readLastTrack, resumeAt, saveLastTrack, saveProgress } from './playbackMemory.js';
 import { createAudioPrefetcher } from './boundedCache.js';
+import {
+  bindMediaSessionHandlers,
+  syncMediaSessionMetadata,
+  syncMediaSessionPlaybackState,
+  syncMediaSessionPosition,
+} from './mediaSession.js';
 import { formatTime, SvgDefs } from './OrbitIcons.jsx';
 import { Header, UpdateBadge, useUpdater } from './OrbitHeader.jsx';
 import Universe from './Universe.jsx';
@@ -242,13 +248,32 @@ export default function App() {
   outputPrefRef.current = outputPref;
   const playingRef = useRef(false);
   playingRef.current = playing;
+  const mediaSessionSyncedAtRef = useRef(0);
+  const mediaActionsRef = useRef(null);
+  const syncMediaPosition = useCallback((audio, force = false) => {
+    if (typeof navigator === 'undefined' || !navigator.mediaSession) return;
+    const now = performance.now();
+    if (!force && now - mediaSessionSyncedAtRef.current < 900) return;
+    mediaSessionSyncedAtRef.current = now;
+    const media = mediaRef.current;
+    const total = audio ? resolveMediaDuration(audio, media?.duration) : 0;
+    const pos = media?.pendingPosition !== undefined ? media.pendingPosition : (audio?.currentTime || 0);
+    syncMediaSessionPosition(navigator.mediaSession, {
+      duration: total,
+      position: pos,
+      playbackRate: audio?.playbackRate || 1,
+    });
+  }, []);
   const syncDuration = useCallback(audio => {
     const media = mediaRef.current;
     if (!media || audio.currentSrc !== media.src) return 0;
     const next = resolveMediaDuration(audio, media.duration);
-    if (next > 0) setDuration(next);
+    if (next > 0) {
+      setDuration(next);
+      syncMediaPosition(audio, true);
+    }
     return next;
-  }, []);
+  }, [syncMediaPosition]);
 
   const showToast = useCallback(message => {
     setToastText(message);
@@ -876,13 +901,84 @@ export default function App() {
     }
   }, [activeLibrary, applyPlaylistChange, showToast]);
 
-  const step = direction => {
+  const seekTo = useCallback(value => {
+    const audio = audioRef.current;
+    const media = mediaRef.current;
+    if (!audio || !media) return;
+    const total = resolveMediaDuration(audio, media.duration) || duration;
+    const clamped = total > 0 ? clamp(value, 0, total) : Math.max(0, value);
+    if (media.pendingPosition !== undefined) media.pendingPosition = clamped;
+    else {
+      audio.currentTime = clamped;
+      persistPlayback(audio, true);
+    }
+    setCurrentTime(clamped);
+    syncMediaPosition(audio, true);
+  }, [duration, persistPlayback, syncMediaPosition]);
+
+  const step = useCallback(direction => {
     if (!tracks.length) return;
-    const next = random ? (current + 1 + Math.floor(Math.random() * (tracks.length - 1))) % tracks.length : current + direction;
-    selectTrack(next, !audioRef.current.paused);
-  };
+    const next = random && tracks.length > 1
+      ? (currentRef.current + 1 + Math.floor(Math.random() * (tracks.length - 1))) % tracks.length
+      : currentRef.current + direction;
+    selectTrack(next, !audioRef.current.paused || Boolean(preparingRef.current));
+  }, [random, selectTrack]);
 
   const track = tracks[current];
+
+  mediaActionsRef.current = {
+    onPlay: () => {
+      if (audioRef.current?.paused) startPlayback();
+    },
+    onPause: () => {
+      cancelPlaybackPreparation();
+      audioRef.current?.pause();
+    },
+    onStop: () => {
+      cancelPlaybackPreparation();
+      const audio = audioRef.current;
+      if (!audio) return;
+      audio.pause();
+      seekTo(0);
+    },
+    onPrevious: () => step(-1),
+    onNext: () => step(1),
+    onSeekTo: target => seekTo(target),
+    onSeekBy: delta => {
+      const audio = audioRef.current;
+      const media = mediaRef.current;
+      const base = media?.pendingPosition !== undefined ? media.pendingPosition : (audio?.currentTime || 0);
+      seekTo(base + delta);
+    },
+  };
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaSession) return undefined;
+    return bindMediaSessionHandlers(navigator.mediaSession, {
+      onPlay: () => mediaActionsRef.current?.onPlay(),
+      onPause: () => mediaActionsRef.current?.onPause(),
+      onStop: () => mediaActionsRef.current?.onStop(),
+      onPrevious: () => mediaActionsRef.current?.onPrevious(),
+      onNext: () => mediaActionsRef.current?.onNext(),
+      onSeekTo: (target, fastSeek) => mediaActionsRef.current?.onSeekTo(target, fastSeek),
+      onSeekBy: delta => mediaActionsRef.current?.onSeekBy(delta),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaSession) return;
+    syncMediaSessionMetadata(navigator.mediaSession, track);
+    syncMediaPosition(audioRef.current, true);
+  }, [track?.id, track?.title, track?.artist, track?.album, track?.cover, libraryVersion, syncMediaPosition]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaSession) return;
+    syncMediaSessionPlaybackState(navigator.mediaSession, {
+      playing,
+      hasTrack: Boolean(track),
+    });
+    syncMediaPosition(audioRef.current, true);
+  }, [playing, track, syncMediaPosition]);
   const qqCount = qqPlaylists.reduce((total, item) => total + item.count, 0);
   const neteaseCount = neteasePlaylists.reduce((total, item) => total + item.count, 0);
   const kugouCount = kugouPlaylists.reduce((total, item) => total + item.count, 0);
@@ -1004,17 +1100,7 @@ export default function App() {
           else audioRef.current.pause();
         }}
         onStep={step}
-        onSeek={value => {
-          const audio = audioRef.current;
-          const media = mediaRef.current;
-          if (!media) return;
-          if (media.pendingPosition !== undefined) media.pendingPosition = value;
-          else {
-            audio.currentTime = value;
-            persistPlayback(audio, true);
-          }
-          setCurrentTime(value);
-        }}
+        onSeek={seekTo}
         onShuffle={() => { setRandom(value => !value); showToast(random ? '按顺序播放' : '随机漫游已开启'); }}
         onRepeat={() => { setRepeat(value => !value); showToast(repeat ? '播放结束后自动切歌' : '单曲循环'); }}
         onFavorite={() => setLiked(value => {
@@ -1074,7 +1160,10 @@ export default function App() {
           const media = mediaRef.current;
           if (!media || media.pendingPosition !== undefined || audio.currentSrc !== media.src) return;
           setCurrentTime(audio.currentTime || 0);
-          if (!audio.paused) persistPlayback(audio);
+          if (!audio.paused) {
+            persistPlayback(audio);
+            syncMediaPosition(audio);
+          }
         }}
         onLoadedMetadata={event => restorePosition(event.currentTarget)}
         onDurationChange={event => syncDuration(event.currentTarget)}

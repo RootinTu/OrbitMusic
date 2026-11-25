@@ -2,7 +2,7 @@
 
 在音乐宇宙里漫游的桌面播放器。使用 React、Electron、WebGL 声波地形与 Liquid DOM 液态玻璃，将歌单、歌词和实时律动放在同一个空间里。
 
-**当前版本：2.2.5** · [下载 Windows 版](https://github.com/RootinTu/OrbitMusic/releases/latest) · [更新记录](CHANGELOG.md)
+**当前版本：2.2.6** · [下载 Windows 版](https://github.com/RootinTu/OrbitMusic/releases/latest) · [更新记录](CHANGELOG.md)
 
 ## 应用截图
 
