@@ -93,7 +93,7 @@ const xmlText = value => value.replace(/&(#x[\da-f]+|#\d+|quot|apos|lt|gt|amp);/
 });
 
 export function parseNativeLyrics(source, format) {
-  if (typeof source !== 'string' || !['qrc', 'yrc'].includes(format)) return { rows: [], meta: {} };
+  if (typeof source !== 'string' || !['qrc', 'yrc', 'krc'].includes(format)) return { rows: [], meta: {} };
   const body = source.includes('LyricContent')
     ? xmlText(source.match(/LyricContent\s*=\s*(["'])([\s\S]*?)\1/i)?.[2] || '') : source;
   const meta = parseLrc(body).meta;
@@ -104,10 +104,14 @@ export function parseNativeLyrics(source, format) {
     if (!head) return;
     const start = Number(head[1]) / 1000 - offset;
     const content = line.slice(head[0].length);
-    const pattern = format === 'qrc' ? /\((\d+),(\d+)\)/g : /\((\d+),(\d+),\d+\)/g;
+    const pattern = format === 'qrc'
+      ? /\((\d+),(\d+)\)/g
+      : format === 'krc'
+        ? /<(\d+),(\d+),\d+>/g
+        : /\((\d+),(\d+),\d+\)/g;
     const tags = [...content.matchAll(pattern)];
     const words = [];
-    if (format === 'yrc' && tags[0]?.index > 0) {
+    if ((format === 'yrc' || format === 'krc') && tags[0]?.index > 0) {
       words.push({ text: content.slice(0, tags[0].index), start: null, end: null });
     }
     tags.forEach((tag, index) => {
@@ -115,7 +119,9 @@ export function parseNativeLyrics(source, format) {
         ? content.slice(index ? tags[index - 1].index + tags[index - 1][0].length : 0, tag.index)
         : content.slice(tag.index + tag[0].length, tags[index + 1]?.index ?? content.length);
       if (!text) return;
-      const time = Number(tag[1]) / 1000 - offset;
+      const time = format === 'krc'
+        ? start + Number(tag[1]) / 1000
+        : Number(tag[1]) / 1000 - offset;
       words.push({ text, start: time, end: time + Number(tag[2]) / 1000 });
     });
     if (format === 'qrc' && tags.length) {
@@ -126,7 +132,7 @@ export function parseNativeLyrics(source, format) {
     const text = content.replace(pattern, '');
     const timed = words.filter(word => word.start !== null);
     const valid = timed.length > 0 && timed.every((word, index) => Number.isFinite(word.end)
-      && word.start >= start && (!index || word.start >= timed[index - 1].start));
+      && word.start >= start - 0.001 && (!index || word.start >= timed[index - 1].start - 0.001));
     if (!grouped.has(start)) grouped.set(start, []);
     const lines = grouped.get(start);
     if (text && !lines.some(item => item.text === text)) lines.push({ text, words: valid ? words : null });
@@ -143,7 +149,8 @@ export function parseLyricsPayload(payload) {
   if (typeof payload === 'string') return parseLrc(payload);
   const plain = parseLrc(payload?.lyric);
   const native = payload?.provider === 'qq' ? parseNativeLyrics(payload.qrc, 'qrc')
-    : payload?.provider === 'netease' ? parseNativeLyrics(payload.yrc, 'yrc') : null;
+    : payload?.provider === 'netease' ? parseNativeLyrics(payload.yrc, 'yrc')
+      : payload?.provider === 'kugou' ? parseNativeLyrics(payload.krc, 'krc') : null;
   const hasNativeWords = native?.rows.some(row => row.wordLines.some(Boolean));
   const original = hasNativeWords ? native : plain;
   const translation = parseLrc(hasNativeWords && payload?.provider === 'netease'

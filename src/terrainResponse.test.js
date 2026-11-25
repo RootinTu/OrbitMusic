@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTerrainResponse, stepTerrainResponse, LOW_BAND_LIMITS } from './terrainResponse.js';
 import { createTerrainGL } from './terrainGL.js';
+import { createBeatCorridorGL } from './beatCorridorGL.js';
+import { createWaterSurfaceGL } from './waterSurfaceGL.js';
 
 const sample = (state, overrides = {}) => stepTerrainResponse(state, {
   subBass: 0.55, bass: 0.55, playing: true, dt: 1 / 60, ...overrides,
@@ -175,4 +177,102 @@ test('renderer retains ripple cooldown and onsetRipples=false behavior', () => {
   disabled.frame({ onset: 1 });
   assert.equal(disabled.rippleCount(), 0);
   disabled.renderer.dispose();
+});
+
+test('gentle low-frequency profile swells smoothly on soft ballads and avoids sharp onset spikes', () => {
+  const defaultState = createTerrainResponse();
+  const gentleState = createTerrainResponse();
+  // Soft ballad with steady warm low end and no hard kick onset
+  let defaultSteady = 0;
+  let gentleSteady = 0;
+  for (let i = 0; i < 40; i += 1) {
+    defaultSteady = stepTerrainResponse(defaultState, {
+      subBass: 0.32, bass: 0.35, onset: 0, playing: true, dt: 1 / 60, profile: 'default',
+    }).subBass;
+    gentleSteady = stepTerrainResponse(gentleState, {
+      subBass: 0.32, bass: 0.35, onset: 0, playing: true, dt: 1 / 60, profile: 'gentle',
+    }).subBass;
+  }
+  assert.ok(gentleSteady > defaultSteady * 1.5, `expected gentle steady swell (${gentleSteady}) > 1.5x default (${defaultSteady})`);
+
+  // Soft onset should trigger a gentler, slower peak with a longer release tail
+  const dPulse = stepTerrainResponse(defaultState, {
+    subBass: 0.5, bass: 0.5, onset: 1, playing: true, dt: 1 / 60, profile: 'default',
+  });
+  const gPulse = stepTerrainResponse(gentleState, {
+    subBass: 0.5, bass: 0.5, onset: 1, playing: true, dt: 1 / 60, profile: 'gentle',
+  });
+  assert.ok(gPulse.impulseStrength < dPulse.impulseStrength * 0.5);
+  assert.ok(gPulse.kickEnvelope < dPulse.kickEnvelope);
+
+  // Switch renderer cleanly between default (variant 0) and gentle low-frequency 3D terrain (variant 4)
+  const h = rendererHarness({ variant: 0, profile: 'default' });
+  h.frame({ time: 0.1, onset: 1 });
+  h.renderer.setMode({ variant: 4, profile: 'gentle', theme: 'soft-graphite' });
+  h.frame({ time: 0.2, onset: 0 });
+  assert.ok(Number.isFinite(h.uniforms.get('uSubBass')));
+  assert.ok(h.uniforms.get('uSubBass') > h.uniforms.get('uAir'));
+  h.renderer.dispose();
+});
+
+test('createBeatCorridorGL renders 3D light-gate corridor with shockwaves and 24-band spectrum', () => {
+  const uniforms = new Map();
+  let drawCalls = 0;
+  let deletedProgram = false;
+  const gl = new Proxy({
+    getShaderParameter: () => true,
+    getProgramParameter: () => true,
+    getUniformLocation: (_, name) => name,
+    uniform1f: (name, value) => uniforms.set(name, value),
+    uniform2f: (name, x, y) => uniforms.set(name, [x, y]),
+    uniform1fv: (name, values) => uniforms.set(name, [...values]),
+    uniform4fv: (name, values) => uniforms.set(name, [...values]),
+    drawArrays: () => { drawCalls += 1; },
+    deleteProgram: () => { deletedProgram = true; },
+  }, { get: (target, name) => name in target ? target[name] : (/^[A-Z_]+$/.test(name) ? 0 : () => ({})) });
+  const canvas = { width: 800, height: 600, getContext: () => gl };
+  const corridor = createBeatCorridorGL(canvas);
+  corridor.resize(1440, 900, 1);
+  const bins = new Uint8Array(512).fill(130);
+  corridor.frame({ time: 0.5, dt: 1 / 60, bins, sampleRate: 44100, energy: 0.5, onset: 0.9, kickEnvelope: 0.6, playing: true });
+  assert.equal(drawCalls, 1);
+  assert.ok(uniforms.get('uTravelZ') > 0);
+  assert.ok(uniforms.get('uBeatPulse') > 0);
+  assert.equal((uniforms.get('uSpectrum[0]') || []).length, 24);
+  assert.equal((uniforms.get('uWaveActive[0]') || []).filter(v => v > 0.5).length, 1);
+  corridor.dispose();
+  assert.equal(deletedProgram, true);
+});
+
+test('createWaterSurfaceGL spawns beat and vocal/piano ripples on moonlit water and disposes cleanly', () => {
+  const uniforms = new Map();
+  let drawCalls = 0;
+  let deletedProgram = false;
+  const gl = new Proxy({
+    getShaderParameter: () => true,
+    getProgramParameter: () => true,
+    getUniformLocation: (_, name) => name,
+    uniform1f: (name, value) => uniforms.set(name, value),
+    uniform2f: (name, x, y) => uniforms.set(name, [x, y]),
+    uniform2fv: (name, values) => uniforms.set(name, [...values]),
+    uniform4fv: (name, values) => uniforms.set(name, [...values]),
+    drawArrays: () => { drawCalls += 1; },
+    deleteProgram: () => { deletedProgram = true; },
+  }, { get: (target, name) => name in target ? target[name] : (/^[A-Z_]+$/.test(name) ? 0 : () => ({})) });
+  const canvas = { width: 800, height: 600, getContext: () => gl };
+  const water = createWaterSurfaceGL(canvas);
+  water.resize(1440, 900, 1);
+  const bins = new Uint8Array(512).fill(140);
+  water.frame({ time: 0.5, dt: 1 / 60, bins, sampleRate: 44100, energy: 0.5, onset: 0.9, onsetHigh: 0.7, kickEnvelope: 0.6, playing: true });
+  assert.equal(drawCalls, 1);
+  assert.ok(uniforms.get('uSubBass') > 0);
+  assert.ok(uniforms.get('uBeatPulse') > 0);
+  const activeRipples = (uniforms.get('uRippleMeta[0]') || []).filter((v, i) => i % 2 === 0 && v > 0.5).length;
+  assert.equal(activeRipples, 2);
+  // 紧接着 0.2s 内的连续触发应被冷却拦截，保持水面从容舒缓
+  water.frame({ time: 0.7, dt: 1 / 60, bins, sampleRate: 44100, energy: 0.5, onset: 0.9, onsetHigh: 0.7, kickEnvelope: 0.6, playing: true });
+  const afterCooldown = (uniforms.get('uRippleMeta[0]') || []).filter((v, i) => i % 2 === 0 && v > 0.5).length;
+  assert.equal(afterCooldown, 2);
+  water.dispose();
+  assert.equal(deletedProgram, true);
 });

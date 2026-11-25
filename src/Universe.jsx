@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { tracks } from './tracks.js';
 import { createTerrainGL } from './terrainGL.js';
+import { createBeatCorridorGL } from './beatCorridorGL.js';
+import { createWaterSurfaceGL } from './waterSurfaceGL.js';
 import { fitCardSphere, projectCardY } from './sphereLayout.js';
 import { CardArtistTicker, Icon, LiquidArt } from './OrbitIcons.jsx';
 import LyricsPanel from './LyricsPanel.jsx';
@@ -47,21 +49,33 @@ export default function Universe({ current, playing, currentTime, duration, onSe
     propsRef.current = { current, playing, zoom, backdropMode };
   }, [current, playing, zoom, backdropMode]);
 
-  // GPU 地形（模式 4）只在 PC 端启用。移动设备直接跳过创建，避免 2.4 万个
-  // 实例化方块持续占用 GPU，旧的轻量背景模式仍可正常使用。
+  // GPU 3D 背景（0 声波地形 / 1 光门走廊 / 2 镜面水波）在支持 WebGL2 的桌面端启用；
+  // 移动设备或无 WebGL2 环境自动回落到轻量点阵背景。
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
     if (!glCanvas) return undefined;
     const gpuAllowed = canUseTerrainGL();
-    if (backdropMode !== 4 || !gpuAllowed) {
+    if (!gpuAllowed) {
       glCanvas.style.display = 'none';
       return undefined;
     }
+    const desiredKind = backdropMode === 1 ? 'corridor' : backdropMode === 2 ? 'water' : 'terrain';
+    const currentRenderer = glTerrainRef.current;
+    if (currentRenderer && currentRenderer._kind !== desiredKind) {
+      currentRenderer.dispose();
+      glTerrainRef.current = null;
+    }
     if (!glTerrainRef.current) {
       try {
-        glTerrainRef.current = createTerrainGL(glCanvas, { mobile: false });
+        const nextRenderer = desiredKind === 'corridor'
+          ? createBeatCorridorGL(glCanvas, { mobile: false })
+          : desiredKind === 'water'
+            ? createWaterSurfaceGL(glCanvas, { mobile: false })
+            : createTerrainGL(glCanvas, { mobile: false });
+        if (nextRenderer) nextRenderer._kind = desiredKind;
+        glTerrainRef.current = nextRenderer;
       } catch (error) {
-        console.warn('GPU 地形初始化失败，回落到轻量点阵背景', error);
+        console.warn(`3D 背景 (${desiredKind}) 初始化失败，回落到轻量点阵背景`, error);
         glTerrainRef.current = null;
       }
     }
@@ -793,10 +807,9 @@ export default function Universe({ current, playing, currentTime, duration, onSe
         0, 1
       );
 
-      // GPU 地形模式：24k 个实例化立方体交给 WebGL，2D 画布只保留上面的 UI 层。
+      // GPU 3D 模式：声波地形 / 光门走廊 / 镜面水波交给 WebGL2，2D 画布仅作不支持 WebGL2 时的兜底。
       const gpuAllowed = canUseTerrainGL();
-      const gpuMode = propsRef.current.backdropMode === 4 && gpuAllowed;
-      const gpuActive = gpuMode && !!glTerrainRef.current;
+      const gpuActive = gpuAllowed && !!glTerrainRef.current;
       if (gpuActive) {
         const analysis = analysisRef.current;
         // 地形继续逐帧律动；交互时降低 WebGL 内部像素密度与实例网格，
@@ -832,8 +845,8 @@ export default function Universe({ current, playing, currentTime, duration, onSe
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       context.clearRect(0, 0, width, height);
       context.fillStyle = '#fff';
-      // WebGL2 不可用时退回轻量点阵；不在移动端重复绘制重型 Canvas 地形。
-      const drawMode = propsRef.current.backdropMode === 4 ? 0 : propsRef.current.backdropMode;
+      // WebGL2 不可用或移动端退回轻量点阵。
+      const drawMode = 0;
 
       if (drawMode === 0) {
         const step = width < 600 ? 34 : 42;
@@ -889,7 +902,7 @@ export default function Universe({ current, playing, currentTime, duration, onSe
       const currentTrack = propsRef.current.current;
       const isPlaying = propsRef.current.playing;
       const revealingCards = dragging || performance.now() < revealCardsUntil;
-      const gpuBackdrop = propsRef.current.backdropMode === 4 && !mobile;
+      const gpuBackdrop = canUseTerrainGL() && !mobile;
       if (sphereLayoutDirty || layoutZoom !== propsRef.current.zoom) {
         const rect = universe.getBoundingClientRect();
         const firstCard = cardRefs.current.find(Boolean);

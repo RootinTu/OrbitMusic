@@ -75,7 +75,7 @@ if (!storedPlaylist.library?.list().some(item => item.id === storedPlaylist.id))
 if (initialActiveLibrary) switchImportedTracks(initialActiveLibrary);
 
 // 模式 4 是 GPU 地形：走独立的 WebGL 画布，前面四种仍是原来的 Canvas 2D 画法
-const backdropNames = ['星尘点阵', '声波轨道', '呼吸星云', '律动地形', '声波地形'];
+const backdropNames = ['声波地形', '光门走廊', '镜面水波'];
 
 // QQ 音乐走的是本地代理地址 /api/qq/audio?mid=..&quality=xxx，音质只是 URL 上的一个参数，
 // 所以切换音质改这个参数即可，不用重新导歌。
@@ -220,8 +220,8 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [selected, setSelected] = useState(null);
   const [toastText, setToastText] = useState('');
-  // PC 默认直接进入 Sonic Topography 风格的声波地形；移动端仍使用轻量背景。
-  const [backdropMode, setBackdropMode] = useState(() => canUseTerrainGL() ? 4 : 0);
+  // 默认进入 3D 声波地形，点击右下角 ✦ 在三套 3D 律动背景间轮换。
+  const [backdropMode, setBackdropMode] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [preparing, setPreparing] = useState(false);
   const [lyricsVersion, setLyricsVersion] = useState(0);
@@ -965,8 +965,7 @@ export default function App() {
           <div className="view-controls glass liquid-control">
             <GlassSurface variant="control" />
             <button onClick={() => {
-              const modeCount = canUseTerrainGL() ? backdropNames.length : 4;
-              const next = (backdropMode + 1) % modeCount;
+              const next = (backdropMode + 1) % backdropNames.length;
               setBackdropMode(next);
               showToast(`背景已切换为「${backdropNames[next]}」`);
             }} aria-label={`切换律动背景：${backdropNames[backdropMode]}`} title={`切换律动背景：${backdropNames[backdropMode]}`}>✦</button>

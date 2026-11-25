@@ -66,6 +66,8 @@ export const TERRAIN_THEMES = {
 
 // 默认 EQ 推子，和对方一致：低频两段给到 90/92，地形主要靠低频撑起来
 const DEFAULT_EQ = [90, 92, 50, 50, 50, 50, 50, 48];
+// 柔和歌曲专用低频 EQ：聚焦超低频、低频与温暖中低频，压低高频毛刺。
+const GENTLE_EQ = [98, 96, 84, 58, 22, 14, 10, 8];
 const MAX_RIPPLES = 10;
 
 const VERT = `#version 300 es
@@ -211,9 +213,21 @@ void main() {
     float spectralPeak = peakGate * (uHighMid * 3.2 + uPresence * 3.6 + uBrilliance * 4.0 + uAir * 2.5);
     audioElevation = audioElevation * 0.38 + matrixLift + spectralPeak;
     idleElevation = idleElevation * 0.58 + waveField * 0.18;
+  } else if (uVariant == 4) {
+    // 柔波地形：面向抒情/柔和曲目的低频慢浪，以长波长低频起伏与缓慢呼吸潮汐为主，
+    // 去掉离散随机尖柱与高频刺点，让钢琴、弦乐与人声低频像暗海丝绸般平缓起伏。
+    vec2 slowCoord = pos2D * 0.026;
+    float swellA = snoise(slowCoord + vec2(uTime * 0.045, -uTime * 0.032)) * 0.5 + 0.5;
+    float swellB = snoise(pos2D * 0.017 - vec2(uTime * 0.028, uTime * 0.04)) * 0.5 + 0.5;
+    float radialBreath = sin(centerDist * 0.11 - uTime * 0.72 + swellA * 1.4) * 0.5 + 0.5;
+    float subDome = smoothstep(40.0, 0.0, centerDist) * (0.55 + 0.45 * swellA);
+    float bassSwell = smoothstep(56.0, 8.0, centerDist) * mix(swellB, radialBreath, 0.52);
+    float warmContour = 0.5 + 0.5 * sin(pos2D.x * 0.085 + pos2D.y * 0.065 - uTime * 0.48 + swellB * 2.1);
+    audioElevation = uSubBass * subDome * 4.4 + uBass * bassSwell * 3.8 + uLowMid * warmContour * 2.0 + uMid * swellA * 0.85;
+    idleElevation = mix(swellA, radialBreath, 0.45) * 0.95 * globalFalloff;
   }
   audioElevation *= globalFalloff;
-  audioElevation = max(0.0, audioElevation - 0.2) * uAmplitude;
+  audioElevation = max(0.0, audioElevation - (uVariant == 4 ? 0.06 : 0.2)) * uAmplitude;
 
   float elevation = idleElevation + audioElevation;
 
@@ -229,7 +243,12 @@ void main() {
       float curWidth = 3.0;
       float curFadeDist = 15.0;
       float elevationScale = 4.0;
-      if (uRippleMeta[i].y > 0.5) {
+      if (uVariant == 4) {
+        curSpeed = 8.5;
+        curWidth = 9.0;
+        curFadeDist = 26.0;
+        elevationScale = 2.1;
+      } else if (uRippleMeta[i].y > 0.5) {
         curSpeed = 20.0;
         curWidth = 1.0;
         curFadeDist = 8.0;
@@ -472,10 +491,10 @@ function compile(gl, type, source) {
 }
 
 export function createTerrainGL(canvas, options = {}) {
-  const theme = TERRAIN_THEMES[options.theme] || TERRAIN_THEMES['minimal-monochrome'];
+  let activeTheme = TERRAIN_THEMES[options.theme] || TERRAIN_THEMES['minimal-monochrome'];
   const mobile = !!options.mobile;
-  const variant = options.variant || 0;
-  const desktopHeightGain = !mobile && variant === 0 ? (options.desktopHeightGain ?? 1.24) : 1;
+  let activeVariant = options.variant || 0;
+  let activeProfile = options.profile || (activeVariant === 4 ? 'gentle' : 'default');
   // 移动端 GPU 弱，网格砍到 110（12100 个方块），桌面保持对方的 155（24025 个）
   const gridSize = options.gridSize || (mobile ? 110 : 155);
 
@@ -540,20 +559,33 @@ export function createTerrainGL(canvas, options = {}) {
   U.uRipples = gl.getUniformLocation(program, 'uRipples[0]');
   U.uRippleMeta = gl.getUniformLocation(program, 'uRippleMeta[0]');
 
-  // 静态 uniform：主题色与网格尺寸只设置一次
-  gl.uniform3fv(U.uBaseColor1, theme.base1);
-  gl.uniform3fv(U.uBaseColor2, theme.base2);
-  gl.uniform3fv(U.uFogColor, theme.fog);
-  gl.uniform3fv(U.uCoolCore, theme.coolCore);
-  gl.uniform3fv(U.uCoolEdge, theme.coolEdge);
-  gl.uniform3fv(U.uWarmCore, theme.warmCore);
-  gl.uniform3fv(U.uWarmEdge, theme.warmEdge);
-  gl.uniform3fv(U.uRippleColor, theme.ripple);
-  gl.uniform1f(U.uGlowIntensity, theme.glow);
+  function applyTheme(nextTheme) {
+    activeTheme = nextTheme;
+    gl.uniform3fv(U.uBaseColor1, activeTheme.base1);
+    gl.uniform3fv(U.uBaseColor2, activeTheme.base2);
+    gl.uniform3fv(U.uFogColor, activeTheme.fog);
+    gl.uniform3fv(U.uCoolCore, activeTheme.coolCore);
+    gl.uniform3fv(U.uCoolEdge, activeTheme.coolEdge);
+    gl.uniform3fv(U.uWarmCore, activeTheme.warmCore);
+    gl.uniform3fv(U.uWarmEdge, activeTheme.warmEdge);
+    gl.uniform3fv(U.uRippleColor, activeTheme.ripple);
+    gl.uniform1f(U.uGlowIntensity, activeTheme.glow);
+  }
+
+  function setMode({ variant = activeVariant, profile, theme } = {}) {
+    activeVariant = Number.isInteger(variant) ? variant : 0;
+    activeProfile = profile || (activeVariant === 4 ? 'gentle' : 'default');
+    gl.useProgram?.(program);
+    gl.uniform1i(U.uVariant, activeVariant);
+    if (theme && TERRAIN_THEMES[theme]) applyTheme(TERRAIN_THEMES[theme]);
+  }
+
+  // 静态 uniform：主题色与网格尺寸初始化
+  applyTheme(activeTheme);
   // PC 地形整体抬高，避免音柱主体被底部播放栏和卡片遮住；移动端保持原位置。
   gl.uniform1f(U.uYOffset, options.heightOffset ?? (mobile ? 0 : 6.5));
   gl.uniform1f(U.uCurvature, options.curvature ?? (mobile ? 0 : 11.5));
-  gl.uniform1i(U.uVariant, variant);
+  gl.uniform1i(U.uVariant, activeVariant);
   if (U.uSpectralCentroid) gl.uniform1f(U.uSpectralCentroid, 0.2);
 
   const projection = new Float32Array(16);
@@ -659,30 +691,34 @@ export function createTerrainGL(canvas, options = {}) {
       }
     }
 
+    const isGentle = activeProfile === 'gentle';
+    const eq = isGentle ? GENTLE_EQ : DEFAULT_EQ;
+
     // 持续频谱负责低音起伏，新 onset 通过独立的起振/释放包络补冲击。
     // 不再把 BeatEngine.hit 当柱高直接乘 EQ：那会让每一下都撞到相同的上限。
     const low = stepTerrainResponse(lowResponse, {
       subBass: raw[0], bass: raw[1], onset: input.onset,
-      playing: input.playing, dt: delta, eq: DEFAULT_EQ,
+      playing: input.playing, dt: delta, eq, profile: activeProfile,
     });
     const sub = low.subBass;
     const bass = low.bass;
-    const lowMid = applyEq(raw[2], DEFAULT_EQ[2]);
-    const mid = applyEq(raw[3], DEFAULT_EQ[3]);
-    const highMid = applyEq(raw[4], DEFAULT_EQ[4]);
-    const presence = applyEq(raw[5], DEFAULT_EQ[5]);
-    const brilliance = applyEq(raw[6], DEFAULT_EQ[6]);
-    const air = applyEq(raw[7], DEFAULT_EQ[7]);
+    const lowMid = applyEq(raw[2], eq[2]);
+    const mid = applyEq(raw[3], eq[3]);
+    const highMid = applyEq(raw[4], eq[4]);
+    const presence = applyEq(raw[5], eq[5]);
+    const brilliance = applyEq(raw[6], eq[6]);
+    const air = applyEq(raw[7], eq[7]);
 
-    // 低频已有独立包络，跟随速度采用原作默认 motionSpeed=50 的 31.1/s，
-    // 不再额外乘 2.2 把起振拉成阶跃；其余频段保留原有快起慢落。
-    const blend = 1 - Math.exp(-12 * delta);
-    const lowBlend = 1 - Math.exp(-31.1 * delta);
+    // 柔和模式使用更平缓对称的滤波速度，避免突发尖峰；默认模式保留原有响应曲线。
+    const blend = 1 - Math.exp(-(isGentle ? 4.0 : 12) * delta);
+    const lowBlend = 1 - Math.exp(-(isGentle ? 5.2 : 31.1) * delta);
     const target = smoothTarget;
     target[0] = sub; target[1] = bass; target[2] = lowMid; target[3] = mid;
     target[4] = highMid; target[5] = presence; target[6] = brilliance; target[7] = air;
     for (let i = 0; i < 8; i += 1) {
-      const follow = i < 2 ? lowBlend : (target[i] > smooth[i] ? Math.min(1, blend * 2.2) : blend);
+      const follow = i < 2
+        ? lowBlend
+        : (isGentle ? blend : (target[i] > smooth[i] ? Math.min(1, blend * 2.2) : blend));
       smooth[i] += (target[i] - smooth[i]) * follow;
     }
 
@@ -710,12 +746,16 @@ export function createTerrainGL(canvas, options = {}) {
     const density = active / 8;
 
     // 水波只在新拍点出现时触发，不能拿上一拍还没落完的包络尾巴补发。
-    const rippleGap = Number(options.rippleCooldown) || 0.26;
+    const baseRippleGap = Number(options.rippleCooldown) || 0.26;
+    const rippleGap = isGentle ? Math.max(baseRippleGap, 0.68) : baseRippleGap;
     if (options.onsetRipples !== false && input.playing && low.impulseStrength > 0 && input.time - lastRippleTime > rippleGap) {
       lastRippleTime = input.time;
       const angle = Math.random() * Math.PI * 2;
       const radius = Math.random() * 20;
-      addRipple(Math.cos(angle) * radius, Math.sin(angle) * radius, 0.22 + low.impulseStrength * 0.65, 0);
+      const ripplePower = isGentle
+        ? 0.16 + low.impulseStrength * 0.34
+        : 0.22 + low.impulseStrength * 0.65;
+      addRipple(Math.cos(angle) * radius, Math.sin(angle) * radius, ripplePower, 0);
     }
     const rippleInterval = Number(options.rippleInterval) || 0;
     if (input.playing && rippleInterval > 0 && input.time - lastAmbientRippleTime >= rippleInterval) {
@@ -753,6 +793,9 @@ export function createTerrainGL(canvas, options = {}) {
     gl.uniform1f(U.uSmoothness, smoothness);
     gl.uniform1f(U.uDensity, density);
     gl.uniform1f(U.uEnergy, clamp01(input.energy || 0));
+    const desktopHeightGain = !mobile
+      ? (activeVariant === 0 ? (options.desktopHeightGain ?? 1.24) : activeVariant === 4 ? 1.08 : 1)
+      : 1;
     gl.uniform1f(U.uAmplitude, (options.amplitude || 1) * desktopHeightGain * (input.sensitivity || 1));
     gl.uniform4fv(U.uRipples, rippleData);
     gl.uniform2fv(U.uRippleMeta, rippleMeta);
@@ -767,6 +810,7 @@ export function createTerrainGL(canvas, options = {}) {
   return {
     resize,
     frame,
+    setMode,
     instanceCount: gridSize * gridSize,
     dispose({ loseContext = false } = {}) {
       if (disposed) return;

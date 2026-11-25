@@ -6,9 +6,11 @@ import {
   resolveKugouAudioUrl,
 } from '../desktop/kugou-session.mjs';
 import {
-  buildKugouAudioHeaders, clearKugouAudioSourceCache, extractKugouSpecialId,
+  buildKugouAudioHeaders, clearKugouAudioSourceCache, decodeKugouKrc, extractKugouSpecialId,
   isAllowedKugouAudioUrl as isAllowedServerKugouAudioUrl, putKugouAudioSource,
 } from './kugou-music.mjs';
+import { deflateSync } from 'node:zlib';
+import { parseLyricsPayload } from '../src/lyrics.js';
 
 const hash = '48C685F679FFC7CF08B8A8341CA9DB44';
 const reply = payload => Response.json(payload);
@@ -322,4 +324,23 @@ test('resolveKugouAudioUrl falls back to web /play/songinfo and signals hidden w
   };
   const guest = await resolveKugouAudioUrl(guestSession, { hash });
   assert.deepEqual(guest, { ok: false, reason: 'login' });
+});
+
+test('decodeKugouKrc and parseLyricsPayload produce word-level timestamps for Kugou lyrics', () => {
+  const sampleKrc = '[16050,3850]<0,180,0>差<180,170,0>不<350,160,0>多';
+  const compressed = deflateSync(Buffer.from(sampleKrc, 'utf8'));
+  const key = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
+  const encoded = Buffer.alloc(4 + compressed.length);
+  encoded.write('krc1', 0, 'ascii');
+  for (let i = 0; i < compressed.length; i += 1) encoded[4 + i] = compressed[i] ^ key[i % key.length];
+  const decoded = decodeKugouKrc(encoded.toString('base64'));
+  assert.equal(decoded, sampleKrc);
+
+  const parsed = parseLyricsPayload({ provider: 'kugou', krc: decoded, lyric: '' });
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.rows[0].text, '差不多');
+  assert.equal(parsed.rows[0].wordLines[0].length, 3);
+  assert.equal(parsed.rows[0].wordLines[0][0].text, '差');
+  assert.equal(parsed.rows[0].wordLines[0][0].start, 16.05);
+  assert.equal(parsed.rows[0].wordLines[0][1].start, 16.23);
 });

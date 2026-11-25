@@ -1,6 +1,7 @@
 // Lyrics, public playlists and public search are public metadata.
 // Account and playback operations are handled in Electron's isolated Kugou session.
 import { Readable } from 'node:stream';
+import { inflateSync } from 'node:zlib';
 import { classifyUpstreamError, fetchStreamWithTimeout, fetchWithTimeout } from './http-client.mjs';
 import { createBoundedTtlCache } from './netease-music.mjs';
 
@@ -10,7 +11,56 @@ const KUGOU_API_ORIGIN = 'http://mobilecdnbj.kugou.com';
 const KUGOU_AUDIO_CDN_SUFFIXES = ['kugou.com', 'kugou.net', 'kgimg.com', 'kugoucdn.com'];
 const KUGOU_AUDIO_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131 Safari/537.36';
 const KUGOU_AUDIO_CACHE_TTL_MS = 8 * 60 * 1000;
+const KRC_XOR_KEY = [64, 71, 97, 119, 94, 50, 116, 71, 81, 54, 49, 45, 206, 210, 110, 105];
 const audioSourceCache = createBoundedTtlCache({ maxEntries: 120, ttlMs: KUGOU_AUDIO_CACHE_TTL_MS });
+
+export function decodeKugouKrc(base64Content) {
+  const raw = Buffer.from(String(base64Content || '').trim(), 'base64');
+  if (raw.length <= 4) return '';
+  const body = raw.subarray(4);
+  const xored = Buffer.allocUnsafe(body.length);
+  for (let i = 0; i < body.length; i += 1) {
+    xored[i] = body[i] ^ KRC_XOR_KEY[i % KRC_XOR_KEY.length];
+  }
+  return inflateSync(xored).toString('utf8').replace(/^\uFEFF/, '');
+}
+
+async function fetchKugouKrcLyrics(hash, durationMs) {
+  try {
+    const searchParams = new URLSearchParams({
+      ver: '1',
+      man: 'yes',
+      client: 'mobi',
+      hash,
+      timelength: /^\d{1,9}$/.test(durationMs) ? durationMs : '0',
+    });
+    const searchRes = await fetchWithTimeout(`https://krcs.kugou.com/search?${searchParams}`, {
+      redirect: 'error',
+    }, { timeoutMs: 8000, label: '酷狗逐字歌词检索' });
+    if (!searchRes.ok) return '';
+    const searchJson = await searchRes.json().catch(() => ({}));
+    const candidate = Array.isArray(searchJson?.candidates) ? searchJson.candidates[0] : null;
+    if (!candidate?.id || !candidate?.accesskey) return '';
+    const dlParams = new URLSearchParams({
+      ver: '1',
+      client: 'pc',
+      id: String(candidate.id),
+      accesskey: String(candidate.accesskey),
+      fmt: 'krc',
+      charset: 'utf8',
+    });
+    const dlRes = await fetchWithTimeout(`https://krcs.kugou.com/download?${dlParams}`, {
+      redirect: 'error',
+    }, { timeoutMs: 8000, label: '酷狗逐字歌词下载' });
+    if (!dlRes.ok) return '';
+    const dlJson = await dlRes.json().catch(() => ({}));
+    if (!dlJson?.content) return '';
+    const decoded = decodeKugouKrc(dlJson.content);
+    return /\[\d+,\d+\]/.test(decoded) ? decoded : '';
+  } catch {
+    return '';
+  }
+}
 
 export function isAllowedKugouAudioUrl(rawUrl) {
   try {
@@ -271,8 +321,12 @@ export function registerKugouMusicExpressRoutes(app) {
     const hash = typeof req.query.hash === 'string' ? req.query.hash.trim() : '';
     if (!HASH.test(hash)) return res.status(400).json({ error: '无效的酷狗歌曲编号。' });
     const duration = typeof req.query.duration === 'string' ? req.query.duration : '';
-    const parameters = new URLSearchParams({ cmd: '100', hash, timelength: /^\d{1,9}$/.test(duration) ? duration : '0' });
     try {
+      const krc = await fetchKugouKrcLyrics(hash, duration);
+      if (krc) {
+        return res.json({ provider: 'kugou', hash, krc, lyric: '' });
+      }
+      const parameters = new URLSearchParams({ cmd: '100', hash, timelength: /^\d{1,9}$/.test(duration) ? duration : '0' });
       const response = await fetchWithTimeout(`https://m.kugou.com/app/i/krc.php?${parameters}`, {
         redirect: 'error',
       }, { timeoutMs: 10000, label: '酷狗歌词' });
