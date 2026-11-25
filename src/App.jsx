@@ -958,8 +958,10 @@ export default function App() {
         />
       )}</GlassBackdrop>
       {!journal && (
-        <div className="universe-footer">
-          <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
+        <>
+          <div className="universe-footer">
+            <div className="drag-hint"><span>↔</span> 拖动漫游 <i /> 点击即播</div>
+          </div>
           <div className="view-controls glass liquid-control">
             <GlassSurface variant="control" />
             <button onClick={() => {
@@ -967,11 +969,9 @@ export default function App() {
               const next = (backdropMode + 1) % modeCount;
               setBackdropMode(next);
               showToast(`背景已切换为「${backdropNames[next]}」`);
-            }} aria-label={`切换背景：${backdropNames[backdropMode]}`} title={`切换背景：${backdropNames[backdropMode]}`}>✦</button>
-            <span /><button id="rotate" aria-label="暂停自动旋转" title="暂停自动旋转">◉</button>
-            <span /><button onClick={() => setZoom(value => clamp(value - 0.1, 0.65, 1.35))} aria-label="缩小">−</button><button onClick={() => setZoom(value => clamp(value + 0.1, 0.65, 1.35))} aria-label="放大">＋</button>
+            }} aria-label={`切换律动背景：${backdropNames[backdropMode]}`} title={`切换律动背景：${backdropNames[backdropMode]}`}>✦</button>
           </div>
-        </div>
+        </>
       )}
       {track && <Player
         track={track}
