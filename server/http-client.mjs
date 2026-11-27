@@ -32,16 +32,23 @@ export async function fetchWithTimeout(
   { timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS, label = '上游音乐服务' } = {},
 ) {
   const effectiveTimeout = Math.max(500, Number(timeoutMs) || DEFAULT_UPSTREAM_TIMEOUT_MS);
-  const timeoutSignal = AbortSignal.timeout(effectiveTimeout);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    const timeoutErr = new Error('The operation was aborted due to timeout');
+    timeoutErr.name = 'TimeoutError';
+    controller.abort(timeoutErr);
+  }, effectiveTimeout);
   const signal = options.signal
-    ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([options.signal, timeoutSignal]) : options.signal)
-    : timeoutSignal;
+    ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([options.signal, controller.signal]) : options.signal)
+    : controller.signal;
 
   try {
     return await fetch(url, { ...options, signal });
   } catch (error) {
     if (error instanceof UpstreamRequestError) throw error;
-    if (timeoutSignal.aborted || isTimeoutOrAbort(error)) {
+    if (timedOut || controller.signal.aborted || isTimeoutOrAbort(error)) {
       const seconds = Math.max(1, Math.round(effectiveTimeout / 1000));
       throw new UpstreamRequestError(`${label}请求超时（${seconds}s），请稍后重试`, {
         status: 504,
@@ -55,6 +62,8 @@ export async function fetchWithTimeout(
       code: 'UPSTREAM_NETWORK_ERROR',
       cause: error,
     });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
