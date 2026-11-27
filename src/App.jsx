@@ -20,6 +20,9 @@ import {
 import {
   clearKugouTracks, getActiveKugouPlaylistId, importKugouTracks, listKugouPlaylists, switchKugouPlaylist,
 } from './kugouLibrary.js';
+import {
+  getActiveLocalPlaylistId, importLocalAudioFiles, listLocalPlaylists, switchLocalPlaylist,
+} from './localLibrary.js';
 import { BeatEngine } from './beatEngine.js';
 import { applySink, listOutputs, readBeatOffset, readOutputPref, requestDeviceLabels, saveBeatOffset, saveOutputPref } from './audioOut.js';
 import { clearProviderPlayback, forgetPlaylistPlayback, playbackTrackKey, readLastTrack, resumeAt, saveLastTrack, saveProgress } from './playbackMemory.js';
@@ -38,11 +41,13 @@ import { canUseTerrainGL, clamp, IS_DESKTOP_APP, isHandheld } from './runtimeEnv
 
 if (IS_DESKTOP_APP) tracks.splice(0, tracks.length);
 const ACTIVE_LIBRARY_KEY = 'orbit.activePlaylist.v1';
+const BACKDROP_MODE_KEY = 'orbit.backdropMode.v1';
 const importedPlaylistKey = (provider, id) => (id ? `${provider}:${id}` : null);
 const importedLibraries = new Map([
   ['qq', { list: listQQPlaylists, active: getActivePlaylistId, select: switchQQPlaylist }],
   ['netease', { list: listNeteasePlaylists, active: getActiveNeteasePlaylistId, select: switchNeteasePlaylist }],
   ['kugou', { list: listKugouPlaylists, active: getActiveKugouPlaylistId, select: switchKugouPlaylist }],
+  ['localfile', { list: listLocalPlaylists, active: getActiveLocalPlaylistId, select: switchLocalPlaylist }],
 ]);
 const removeImportedTracks = library => {
   for (let index = library.length - 1; index >= 0; index -= 1) {
@@ -82,6 +87,15 @@ if (initialActiveLibrary) switchImportedTracks(initialActiveLibrary);
 
 // 模式 4 是 GPU 地形：走独立的 WebGL 画布，前面四种仍是原来的 Canvas 2D 画法
 const backdropNames = ['声波地形', '光门走廊', '镜面水波'];
+
+function readBackdropMode() {
+  try {
+    const value = Number(localStorage.getItem(BACKDROP_MODE_KEY));
+    return Number.isInteger(value) && value >= 0 && value < backdropNames.length ? value : 0;
+  } catch {
+    return 0;
+  }
+}
 
 // QQ 音乐走的是本地代理地址 /api/qq/audio?mid=..&quality=xxx，音质只是 URL 上的一个参数，
 // 所以切换音质改这个参数即可，不用重新导歌。
@@ -205,12 +219,15 @@ export default function App() {
   const [activePlaylist, setActivePlaylist] = useState(getActivePlaylistId);
   const [neteasePlaylists, setNeteasePlaylists] = useState(listNeteasePlaylists);
   const [kugouPlaylists, setKugouPlaylists] = useState(listKugouPlaylists);
+  const [localPlaylists, setLocalPlaylists] = useState(listLocalPlaylists);
+  const [dragActive, setDragActive] = useState(false);
   const [activeLibrary, setActiveLibrary] = useState(initialActiveLibrary);
   const combinedPlaylists = useMemo(() => [
     ...qqPlaylists.map(item => ({ ...item, id: importedPlaylistKey('qq', item.id), rawId: item.id, provider: 'qq' })),
     ...neteasePlaylists.map(item => ({ ...item, id: importedPlaylistKey('netease', item.id), rawId: item.id, provider: 'netease' })),
     ...kugouPlaylists.map(item => ({ ...item, id: importedPlaylistKey('kugou', item.id), rawId: item.id, provider: 'kugou' })),
-  ], [kugouPlaylists, neteasePlaylists, qqPlaylists]);
+    ...localPlaylists.map(item => ({ ...item, id: importedPlaylistKey('localfile', item.id), rawId: item.id, provider: 'localfile' })),
+  ], [kugouPlaylists, localPlaylists, neteasePlaylists, qqPlaylists]);
   // 曲库版本号：只要重建过 tracks 就自增。不能用 tracks.length——
   // 两个歌单都是 30 首时长度不变，依赖它的 useMemo 不会重算，卡片就不跟着切。
   const [libraryVersion, setLibraryVersion] = useState(0);
@@ -226,8 +243,8 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [selected, setSelected] = useState(null);
   const [toastText, setToastText] = useState('');
-  // 默认进入 3D 声波地形，点击右下角 ✦ 在三套 3D 律动背景间轮换。
-  const [backdropMode, setBackdropMode] = useState(0);
+  // 记忆上次选择的 3D 律动背景，点击右下角 ✦ 在三套 3D 律动背景间轮换。
+  const [backdropMode, setBackdropMode] = useState(readBackdropMode);
   const [zoom, setZoom] = useState(1);
   const [preparing, setPreparing] = useState(false);
   const [lyricsVersion, setLyricsVersion] = useState(0);
@@ -782,6 +799,7 @@ export default function App() {
     setQQPlaylists(listQQPlaylists());
     setNeteasePlaylists(listNeteasePlaylists());
     setKugouPlaylists(listKugouPlaylists());
+    setLocalPlaylists(listLocalPlaylists());
     setLibraryVersion(version => version + 1);
     setJournal(false);
     setSelected(null);
@@ -979,6 +997,84 @@ export default function App() {
     });
     syncMediaPosition(audioRef.current, true);
   }, [playing, track, syncMediaPosition]);
+
+  // 系统托盘状态双向同步与菜单动作响应
+  useEffect(() => {
+    if (!window.orbitDesktop?.onTrayAction) return undefined;
+    return window.orbitDesktop.onTrayAction(action => {
+      if (action === 'toggle') {
+        if (audioRef.current?.paused) mediaActionsRef.current?.onPlay();
+        else mediaActionsRef.current?.onPause();
+      } else if (action === 'prev') {
+        mediaActionsRef.current?.onPrevious();
+      } else if (action === 'next') {
+        mediaActionsRef.current?.onNext();
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    window.orbitDesktop?.syncTrayState?.({
+      playing,
+      title: track?.title || '',
+      artist: track?.artist || '',
+      hasTrack: Boolean(track),
+    })?.catch?.(() => {});
+  }, [playing, track?.title, track?.artist, Boolean(track)]);
+
+  // 本地音频文件拖放导入（支持同步拖入同名 .lrc 歌词）
+  useEffect(() => {
+    let dragDepth = 0;
+    const hasFiles = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+    const onDragEnter = event => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth += 1;
+      setDragActive(true);
+    };
+    const onDragOver = event => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    };
+    const onDragLeave = event => {
+      if (!hasFiles(event)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) setDragActive(false);
+    };
+    const onDrop = event => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth = 0;
+      setDragActive(false);
+      const files = event.dataTransfer?.files;
+      if (!files?.length) return;
+      const result = importLocalAudioFiles(files);
+      if (!result.added && !result.total) {
+        showToast('未识别到可播放的音频文件（支持 MP3 / FLAC / WAV / M4A / OGG）');
+        return;
+      }
+      const nextKey = importedPlaylistKey('localfile', result.id);
+      switchImportedTracks(nextKey);
+      const lrcNote = result.matchedLyrics ? ` · 已配对 ${result.matchedLyrics} 份歌词` : '';
+      applyPlaylistChange(
+        nextKey,
+        result.added
+          ? `已导入 ${result.added} 首本地音频${lrcNote}（共 ${result.total} 首）`
+          : `已切换到「${result.name}」· ${result.total} 首`,
+      );
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [applyPlaylistChange, showToast]);
   const qqCount = qqPlaylists.reduce((total, item) => total + item.count, 0);
   const neteaseCount = neteasePlaylists.reduce((total, item) => total + item.count, 0);
   const kugouCount = kugouPlaylists.reduce((total, item) => total + item.count, 0);
@@ -1042,6 +1138,7 @@ export default function App() {
           currentTime={currentTime}
           duration={duration}
           onSelect={selectTrack}
+          onSeek={seekTo}
           zoom={zoom}
           backdropMode={backdropMode}
           onRotateToast={showToast}
@@ -1063,6 +1160,7 @@ export default function App() {
             <button onClick={() => {
               const next = (backdropMode + 1) % backdropNames.length;
               setBackdropMode(next);
+              try { localStorage.setItem(BACKDROP_MODE_KEY, String(next)); } catch { /* ignore */ }
               showToast(`背景已切换为「${backdropNames[next]}」`);
             }} aria-label={`切换律动背景：${backdropNames[backdropMode]}`} title={`切换律动背景：${backdropNames[backdropMode]}`}>✦</button>
           </div>
@@ -1139,6 +1237,14 @@ export default function App() {
           onSwitchPlaylist: id => handleSwitchPlaylist(importedPlaylistKey('kugou', id)),
         }}
       />
+      {dragActive && (
+        <div className="drop-overlay" aria-hidden="true">
+          <div className="drop-overlay-card">
+            <strong>松开以导入本地音频</strong>
+            <span>支持 MP3 / FLAC / WAV / M4A / OGG · 同名 .lrc 歌词将自动配对</span>
+          </div>
+        </div>
+      )}
       <div id="toast" className={toastText ? 'show' : ''} role="status">{toastText}</div>
       <audio
         ref={audioRef}

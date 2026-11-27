@@ -1,7 +1,8 @@
 // QQ Music and Netease Cloud Music login handling is adapted from Sonic Topography for local,
 // personal non-commercial use. See THIRD_PARTY_NOTICES.md.
-import { app, BrowserWindow, ipcMain, powerSaveBlocker, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, powerSaveBlocker, session, shell, Tray } from 'electron';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -36,6 +37,34 @@ const NETEASE_LOGIN_URL = 'https://music.163.com/#/login';
 const NETEASE_LOGIN_ALLOWED_HOSTS = ['163.com', 'netease.com', '126.net'];
 const KUGOU_LOGIN_PARTITION = 'persist:orbit-music-kugou-login';
 let mainWindow = null;
+let tray = null;
+let isQuitting = false;
+let closePromptOpen = false;
+let closeBehavior = 'ask'; // 'ask' | 'tray' | 'quit'
+let trayPlaybackState = { playing: false, title: '', artist: '', hasTrack: false };
+
+function desktopPrefsPath() {
+  return path.join(app.getPath('userData'), 'orbit-desktop-prefs.json');
+}
+
+function loadDesktopPrefs() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(desktopPrefsPath(), 'utf8'));
+    if (['ask', 'tray', 'quit'].includes(raw?.closeBehavior)) {
+      closeBehavior = raw.closeBehavior;
+    }
+  } catch { /* 首次启动或配置文件缺失时使用默认 'ask' */ }
+}
+
+function setCloseBehavior(next) {
+  if (!['ask', 'tray', 'quit'].includes(next)) return;
+  closeBehavior = next;
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(desktopPrefsPath(), JSON.stringify({ closeBehavior }, null, 2), 'utf8');
+  } catch { /* ignore persistence failure */ }
+  refreshTrayMenu();
+}
 let kugouLoginWindow = null;
 let kugouResolverWindow = null;
 let kugouResolverCleanup = null;
@@ -68,6 +97,77 @@ function revealMainWindow() {
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
   mainWindow.focus();
+}
+
+function sendTrayAction(action) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send('orbit-tray-action', action);
+}
+
+function refreshTrayMenu() {
+  if (!tray || tray.isDestroyed()) return;
+  const { playing, title, artist, hasTrack } = trayPlaybackState;
+  const trackLabel = title ? `${title}${artist ? ` · ${artist}` : ''}` : 'ORBIT Music';
+  const visible = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized());
+  tray.setToolTip(title ? `ORBIT Music · ${trackLabel}` : 'ORBIT Music');
+  const menu = Menu.buildFromTemplate([
+    { label: trackLabel.slice(0, 48), enabled: false },
+    { type: 'separator' },
+    { label: playing ? '暂停' : '播放', enabled: hasTrack, click: () => sendTrayAction('toggle') },
+    { label: '上一首', enabled: hasTrack, click: () => sendTrayAction('prev') },
+    { label: '下一首', enabled: hasTrack, click: () => sendTrayAction('next') },
+    { type: 'separator' },
+    {
+      label: visible ? '隐藏到托盘' : '显示 ORBIT Music',
+      click: () => {
+        if (visible) {
+          mainWindow?.hide();
+          emitVisualActivity(false);
+        } else {
+          revealMainWindow();
+        }
+      },
+    },
+    {
+      label: '关闭按钮行为',
+      submenu: [
+        { label: '每次询问', type: 'radio', checked: closeBehavior === 'ask', click: () => setCloseBehavior('ask') },
+        { label: '最小化到托盘', type: 'radio', checked: closeBehavior === 'tray', click: () => setCloseBehavior('tray') },
+        { label: '直接退出', type: 'radio', checked: closeBehavior === 'quit', click: () => setCloseBehavior('quit') },
+      ],
+    },
+    { type: 'separator' },
+    {
+      label: '退出 ORBIT Music',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+function ensureAppTray() {
+  if (tray && !tray.isDestroyed()) return tray;
+  try {
+    const iconPath = path.join(__dirname, 'icons', process.platform === 'win32' ? 'orbit.ico' : 'orbit.png');
+    tray = new Tray(iconPath);
+    tray.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+        mainWindow.focus();
+      } else {
+        revealMainWindow();
+      }
+    });
+    tray.on('double-click', revealMainWindow);
+    refreshTrayMenu();
+  } catch (error) {
+    console.warn('系统托盘初始化失败，继续以常规窗口模式运行', error);
+    tray = null;
+  }
+  return tray;
 }
 
 function emitVisualActivity(active) {
@@ -791,14 +891,59 @@ async function createWindow() {
   });
   mainWindow.webContents.once('dom-ready', () => revealMainWindow());
   mainWindow.on('ready-to-show', () => revealMainWindow());
-  mainWindow.on('minimize', () => emitVisualActivity(false));
-  mainWindow.on('hide', () => emitVisualActivity(false));
-  mainWindow.on('restore', () => emitVisualActivity(true));
+  mainWindow.on('minimize', () => { emitVisualActivity(false); refreshTrayMenu(); });
+  mainWindow.on('hide', () => { emitVisualActivity(false); refreshTrayMenu(); });
+  mainWindow.on('restore', () => { emitVisualActivity(true); refreshTrayMenu(); });
   mainWindow.on('show', () => {
     emitVisualActivity(true);
+    refreshTrayMenu();
     if (!mainWindow?.isDestroyed?.() && !mainWindow?.webContents?.isDestroyed?.()) {
       mainWindow.webContents.send('orbit-window-shown');
     }
+  });
+  mainWindow.on('close', event => {
+    if (process.platform !== 'win32' || isQuitting || !tray || tray.isDestroyed()) return;
+    if (closeBehavior === 'quit') {
+      isQuitting = true;
+      return;
+    }
+    event.preventDefault();
+    if (closeBehavior === 'tray') {
+      mainWindow.hide();
+      emitVisualActivity(false);
+      refreshTrayMenu();
+      return;
+    }
+    if (closePromptOpen) return;
+    closePromptOpen = true;
+    dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: '关闭 ORBIT Music',
+      message: '点击关闭按钮时希望执行什么操作？',
+      detail: '可在系统托盘右键菜单「关闭按钮行为」中随时修改。',
+      buttons: ['最小化到托盘', '直接退出', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+      checkboxLabel: '记住我的选择',
+      checkboxChecked: false,
+    }).then(({ response, checkboxChecked }) => {
+      closePromptOpen = false;
+      if (response === 0) {
+        if (checkboxChecked) setCloseBehavior('tray');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.hide();
+          emitVisualActivity(false);
+          refreshTrayMenu();
+        }
+      } else if (response === 1) {
+        if (checkboxChecked) setCloseBehavior('quit');
+        isQuitting = true;
+        app.quit();
+      }
+    }).catch(() => {
+      closePromptOpen = false;
+    });
   });
   mainWindow.on('closed', () => { mainWindow = null; });
   await mainWindow.loadURL(appUrl);
@@ -971,7 +1116,19 @@ handleMainIpc('orbit-install-update', async () => {
   }
   const error = await shell.openPath(downloadedInstallerPath);
   if (error) return { ok: false, reason: error };
+  isQuitting = true;
   setTimeout(() => app.quit(), 900);
+  return { ok: true };
+});
+
+handleMainIpc('orbit-tray-state', (_event, next) => {
+  trayPlaybackState = {
+    playing: Boolean(next?.playing),
+    title: String(next?.title || '').trim().slice(0, 120),
+    artist: String(next?.artist || '').trim().slice(0, 80),
+    hasTrack: Boolean(next?.hasTrack),
+  };
+  refreshTrayMenu();
   return { ok: true };
 });
 
@@ -989,9 +1146,18 @@ handleMainIpc('orbit-clear-netease-login', async () => {
 
 if (hasSingleInstanceLock) {
   app.on('second-instance', revealMainWindow);
+  app.on('before-quit', () => {
+    isQuitting = true;
+    if (tray && !tray.isDestroyed()) {
+      tray.destroy();
+      tray = null;
+    }
+  });
   app.whenReady().then(async () => {
+    loadDesktopPrefs();
     watchQQPlaybackCookies();
     watchNeteaseCookies();
+    ensureAppTray();
     await createWindow();
     // 窗口就绪后再检查更新，之前发的状态事件没有接收方会丢。
     if (updaterEnabled) checkForUpdates().catch(() => {});

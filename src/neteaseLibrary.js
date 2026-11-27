@@ -1,6 +1,6 @@
 const LEGACY_KEY = 'orbit.netease.library.v1';
 const LIBRARY_KEY = 'orbit.netease.library.v2';
-export const MAX_NETEASE_IMPORTS = 30;
+export const MAX_NETEASE_IMPORTS = 150;
 export const MAX_NETEASE_PLAYLISTS = 8;
 export const NETEASE_LOOSE_PLAYLIST_ID = 'loose';
 

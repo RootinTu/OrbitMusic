@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { tracks } from './tracks.js';
 import { createTerrainGL } from './terrainGL.js';
 import { createBeatCorridorGL } from './beatCorridorGL.js';
@@ -8,25 +8,30 @@ import { CardArtistTicker, Icon, LiquidArt } from './OrbitIcons.jsx';
 import LyricsPanel from './LyricsPanel.jsx';
 import { canUseTerrainGL, clamp, IS_DESKTOP_APP } from './runtimeEnv.js';
 
-function makeCardCoordinates() {
+export const SPHERE_PAGE_SIZE = 30;
+
+function makeCardCoordinates(page = 0) {
+  const start = Math.max(0, page) * SPHERE_PAGE_SIZE;
+  const pageTracks = tracks.slice(start, start + SPHERE_PAGE_SIZE);
+  const count = pageTracks.length;
   let rowCounts;
-  if (tracks.length === 19) rowCounts = [3, 4, 5, 4, 3];
-  else if (tracks.length <= 30) rowCounts = [4, 7, 8, 7, 4].map((amount, index, rows) => {
+  if (count === 19) rowCounts = [3, 4, 5, 4, 3];
+  else if (count <= 30) rowCounts = [4, 7, 8, 7, 4].map((amount, index, rows) => {
     const used = rows.slice(0, index).reduce((sum, value) => sum + value, 0);
-    return Math.max(0, Math.min(amount, tracks.length - used));
+    return Math.max(0, Math.min(amount, count - used));
   });
   else {
     const weights = [0.13, 0.22, 0.3, 0.22];
-    const firstFour = weights.map(weight => Math.floor(tracks.length * weight));
-    rowCounts = [...firstFour, tracks.length - firstFour.reduce((sum, value) => sum + value, 0)];
+    const firstFour = weights.map(weight => Math.floor(count * weight));
+    rowCounts = [...firstFour, count - firstFour.reduce((sum, value) => sum + value, 0)];
   }
   const result = [];
   let cardIndex = 0;
   rowCounts.forEach((amount, rowIndex) => {
     const lat = (rowIndex - (rowCounts.length - 1) / 2) * 0.52;
-    for (let column = 0; column < amount && cardIndex < tracks.length; column += 1) {
+    for (let column = 0; column < amount && cardIndex < count; column += 1) {
       result.push({
-        track: tracks[cardIndex],
+        track: pageTracks[cardIndex],
         lat,
         lon: column / amount * Math.PI * 2 + rowIndex * 0.27,
       });
@@ -36,21 +41,28 @@ function makeCardCoordinates() {
   return result;
 }
 
-export default function Universe({ current, playing, currentTime, duration, onSelect, zoom, backdropMode, onRotateToast, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge, soundfield }) {
+export default function Universe({ current, playing, currentTime, duration, onSelect, onSeek, zoom, backdropMode, onRotateToast, analysisRef, audioRef, libraryVersion, lyricsVersion, onOpenBridge, soundfield }) {
   const universeRef = useRef(null);
   const { canvasRef, glCanvasRef } = soundfield;
   const glTerrainRef = useRef(null);
   const cardRefs = useRef([]);
   const ignoreDragClick = useRef(false);
   const propsRef = useRef({ current, playing, zoom, backdropMode });
-  const coordinates = useMemo(makeCardCoordinates, [libraryVersion]);
+  const pageCount = Math.max(1, Math.ceil(tracks.length / SPHERE_PAGE_SIZE));
+  const [page, setPage] = useState(() => Math.min(pageCount - 1, Math.floor(Math.max(0, current) / SPHERE_PAGE_SIZE)));
+  useEffect(() => {
+    const targetPage = Math.min(pageCount - 1, Math.floor(Math.max(0, current) / SPHERE_PAGE_SIZE));
+    setPage(previous => (previous === targetPage ? previous : targetPage));
+  }, [current, pageCount, libraryVersion]);
+  const safePage = Math.min(page, pageCount - 1);
+  const coordinates = useMemo(() => makeCardCoordinates(safePage), [libraryVersion, safePage]);
 
   useEffect(() => {
     propsRef.current = { current, playing, zoom, backdropMode };
   }, [current, playing, zoom, backdropMode]);
 
   // GPU 3D 背景（0 声波地形 / 1 光门走廊 / 2 镜面水波）在支持 WebGL2 的桌面端启用；
-  // 移动设备或无 WebGL2 环境自动回落到轻量点阵背景。
+  // 切换模式时平滑淡出旧画布并在下一帧淡入新场景，避免 WebGL 重建时的硬切闪烁。
   useEffect(() => {
     const glCanvas = glCanvasRef.current;
     if (!glCanvas) return undefined;
@@ -61,26 +73,52 @@ export default function Universe({ current, playing, currentTime, duration, onSe
     }
     const desiredKind = backdropMode === 1 ? 'corridor' : backdropMode === 2 ? 'water' : 'terrain';
     const currentRenderer = glTerrainRef.current;
-    if (currentRenderer && currentRenderer._kind !== desiredKind) {
-      currentRenderer.dispose();
-      glTerrainRef.current = null;
+    if (currentRenderer && currentRenderer._kind === desiredKind) {
+      glCanvas.style.display = 'block';
+      glCanvas.classList.remove('is-switching');
+      return undefined;
     }
-    if (!glTerrainRef.current) {
-      try {
-        const nextRenderer = desiredKind === 'corridor'
-          ? createBeatCorridorGL(glCanvas, { mobile: false })
-          : desiredKind === 'water'
-            ? createWaterSurfaceGL(glCanvas, { mobile: false })
-            : createTerrainGL(glCanvas, { mobile: false });
-        if (nextRenderer) nextRenderer._kind = desiredKind;
-        glTerrainRef.current = nextRenderer;
-      } catch (error) {
-        console.warn(`3D 背景 (${desiredKind}) 初始化失败，回落到轻量点阵背景`, error);
+
+    let swapTimer = 0;
+    let fadeInFrame = 0;
+    let cancelled = false;
+    const mountRenderer = () => {
+      if (cancelled) return;
+      if (glTerrainRef.current && glTerrainRef.current._kind !== desiredKind) {
+        glTerrainRef.current.dispose();
         glTerrainRef.current = null;
       }
+      if (!glTerrainRef.current) {
+        try {
+          const nextRenderer = desiredKind === 'corridor'
+            ? createBeatCorridorGL(glCanvas, { mobile: false })
+            : desiredKind === 'water'
+              ? createWaterSurfaceGL(glCanvas, { mobile: false })
+              : createTerrainGL(glCanvas, { mobile: false });
+          if (nextRenderer) nextRenderer._kind = desiredKind;
+          glTerrainRef.current = nextRenderer;
+        } catch (error) {
+          console.warn(`3D 背景 (${desiredKind}) 初始化失败，回落到轻量点阵背景`, error);
+          glTerrainRef.current = null;
+        }
+      }
+      glCanvas.style.display = glTerrainRef.current ? 'block' : 'none';
+      fadeInFrame = requestAnimationFrame(() => {
+        if (!cancelled) glCanvas.classList.remove('is-switching');
+      });
+    };
+
+    if (currentRenderer) {
+      glCanvas.classList.add('is-switching');
+      swapTimer = setTimeout(mountRenderer, 180);
+    } else {
+      mountRenderer();
     }
-    glCanvas.style.display = glTerrainRef.current ? 'block' : 'none';
-    return undefined;
+    return () => {
+      cancelled = true;
+      clearTimeout(swapTimer);
+      cancelAnimationFrame(fadeInFrame);
+    };
   }, [backdropMode, glCanvasRef]);
 
   useEffect(() => () => {
@@ -1149,12 +1187,12 @@ export default function Universe({ current, playing, currentTime, duration, onSe
     <main ref={universeRef} id="universe" aria-label="拖动旋转歌单宇宙" tabIndex="0">
       <div className="ambient" /><div className="orbit-line one" /><div className="orbit-line two" />
       {tracks[current] ? (
-        <LyricsPanel track={tracks[current]} trackNumber={current + 1} currentTime={currentTime} duration={duration} playing={playing} audioRef={audioRef} analysisRef={analysisRef} lyricsVersion={lyricsVersion} />
+        <LyricsPanel track={tracks[current]} trackNumber={current + 1} currentTime={currentTime} duration={duration} playing={playing} audioRef={audioRef} analysisRef={analysisRef} lyricsVersion={lyricsVersion} onSeek={onSeek} />
       ) : (
         <div className="empty-universe">
           <span className="eyebrow">ORBIT DESKTOP / EMPTY LIBRARY</span>
           <h1>你的音乐宇宙，<br />从第一首导入开始。</h1>
-          <p>从 QQ 音乐、网易云音乐或酷狗音乐搜索歌曲、导入歌单。</p>
+          <p>从 QQ 音乐、网易云音乐或酷狗音乐导入歌单，或直接拖入本地音频文件播放。</p>
           <button className="empty-import" onClick={onOpenBridge}>登录或导入歌曲 <span>↗</span></button>
         </div>
       )}
@@ -1182,7 +1220,17 @@ export default function Universe({ current, playing, currentTime, duration, onSe
         ))}
       </div>
       <div className="side-label">ORBIT · USER IMPORTED MUSIC ARCHIVE</div>
-      <div className="coordinates">{IS_DESKTOP_APP ? 'USER IMPORTED AUDIO' : 'FULL LOCAL AUDIO'}<br />{tracks.length} TRACKS</div>
+      <div className="coordinates">
+        {IS_DESKTOP_APP ? 'USER IMPORTED AUDIO' : 'FULL LOCAL AUDIO'}<br />
+        {tracks.length} TRACKS{pageCount > 1 ? ` · PAGE ${safePage + 1}/${pageCount}` : ''}
+      </div>
+      {pageCount > 1 && (
+        <div className="universe-pager glass" onPointerDown={event => event.stopPropagation()} aria-label="歌单分页切换">
+          <button type="button" onClick={() => setPage(p => (p - 1 + pageCount) % pageCount)} aria-label="上一页">‹</button>
+          <span>{safePage + 1} / {pageCount}</span>
+          <button type="button" onClick={() => setPage(p => (p + 1) % pageCount)} aria-label="下一页">›</button>
+        </div>
+      )}
     </main>
   );
 }

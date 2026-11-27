@@ -4,9 +4,8 @@
 const LEGACY_KEY = 'orbit.qq.imported.v1';
 const LIBRARY_KEY = 'orbit.qq.library.v2';
 
-// 单个歌单最多多少首。音乐宇宙的卡片排布是按 19～30 张设计的，
-// 再往上堆卡片会挤成一团，所以上限定在 30。
-export const MAX_QQ_IMPORTS = 30;
+// 单个歌单最多 150 首（球面按每页 30 首自动分页展示，既保证 3D 卡片不拥挤也能完整导入大歌单）。
+export const MAX_QQ_IMPORTS = 150;
 // 歌单个数上限：单个歌单 30 首 × 8 个 = 240 首，再多是纯负担。
 export const MAX_QQ_PLAYLISTS = 8;
 // 从搜索结果逐首“＋”进来的歌，没有归属歌单，统一塞进这个兜底歌单。

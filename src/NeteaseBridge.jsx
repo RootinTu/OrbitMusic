@@ -182,7 +182,7 @@ export default function NeteaseBridge({ open, account, browseAccountPlaylists, o
           <div className="bridge-pane bridge-library">
             {preview ? <>
               <div className="bridge-preview-head"><BridgeGlassButton className="bridge-preview-back" onClick={closePreview} aria-label="返回歌单列表">←</BridgeGlassButton><span><strong>{preview.name}</strong><small>已选 {selected.size} / {MAX_NETEASE_IMPORTS} · 共 {preview.songs.length} 首</small></span></div>
-              <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><BridgeGlassButton onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 30 首</BridgeGlassButton><BridgeGlassButton onClick={() => setSelected(new Set())}>清空</BridgeGlassButton></div>
+              <div className="bridge-preview-actions"><span>选择要放进音乐宇宙的歌曲</span><BridgeGlassButton onClick={() => setSelected(new Set(preview.songs.slice(0, MAX_NETEASE_IMPORTS).map(song => song.id)))}>前 {MAX_NETEASE_IMPORTS} 首</BridgeGlassButton><BridgeGlassButton onClick={() => setSelected(new Set())}>清空</BridgeGlassButton></div>
               <div className="bridge-preview-list">{preview.songs.map(song => <label className={`bridge-preview-row ${selected.has(song.id) ? 'checked' : ''}`} key={song.id}><input type="checkbox" checked={selected.has(song.id)} onChange={() => toggle(song.id)} /><b>{song.name}</b><small>{song.artist} · {song.album}</small></label>)}</div>
               <BridgeGlassButton className="bridge-preview-import" disabled={!selected.size} onClick={importPreview}>导入 {selected.size} 首到音乐宇宙</BridgeGlassButton>
             </> : <>

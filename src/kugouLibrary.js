@@ -1,6 +1,6 @@
 const KEY = 'orbit.kugou.library.v1';
 const HASH = /^[a-f0-9]{32}$/i;
-export const MAX_KUGOU_TRACKS = 30;
+export const MAX_KUGOU_TRACKS = 150;
 export const MAX_KUGOU_PLAYLISTS = 8;
 
 function uniqueSongs(songs) {

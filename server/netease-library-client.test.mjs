@@ -22,19 +22,19 @@ test('migrates the old flat Netease collection into its own playlist', () => {
   assert.equal(values.has('orbit.netease.library.v1'), false);
 });
 
-test('stores separate playlists and activates only one 30-song list', () => {
+test('stores separate playlists and activates only one paginated list up to limit', () => {
   values.clear();
   const runtime = [];
-  const first = Array.from({ length: 35 }, (_, index) => ({ id: `a-${index}`, name: `A${index}`, duration: 200000 }));
+  const first = Array.from({ length: 155 }, (_, index) => ({ id: `a-${index}`, name: `A${index}`, duration: 200000 }));
   const second = Array.from({ length: 4 }, (_, index) => ({ id: `b-${index}`, name: `B${index}`, duration: 200000 }));
   const importedA = library.importNeteaseTracks(runtime, first, { id: 'playlist-a', name: '歌单 A' });
   const importedB = library.importNeteaseTracks(runtime, second, { id: 'playlist-b', name: '歌单 B' });
-  assert.equal(importedA.count, 30);
+  assert.equal(importedA.count, 150);
   assert.equal(importedB.count, 4);
-  assert.deepEqual(library.listNeteasePlaylists().map(item => [item.id, item.count]), [['playlist-a', 30], ['playlist-b', 4]]);
+  assert.deepEqual(library.listNeteasePlaylists().map(item => [item.id, item.count]), [['playlist-a', 150], ['playlist-b', 4]]);
   assert.equal(runtime.length, 4);
   assert.equal(runtime.every(track => track.provider === 'netease' && track.cloudId.startsWith('b-')), true);
   library.switchNeteasePlaylist(runtime, 'playlist-a');
-  assert.equal(runtime.length, 30);
+  assert.equal(runtime.length, 150);
   assert.equal(runtime.every(track => track.provider === 'netease' && track.cloudId.startsWith('a-')), true);
 });

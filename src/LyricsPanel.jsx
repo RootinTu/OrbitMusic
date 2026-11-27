@@ -3,6 +3,16 @@ import { ensureLrc, findLrcIndex } from './lyrics.js';
 import LrcLine from './LrcLine.jsx';
 import { formatTime } from './OrbitIcons.jsx';
 
+const TRANSLATION_PREF_KEY = 'orbit.lyricsTranslation.v1';
+
+function readTranslationPref() {
+  try {
+    return localStorage.getItem(TRANSLATION_PREF_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 function useMobile() {
   const [mobile, setMobile] = useState(() => window.innerWidth < 600);
   useEffect(() => {
@@ -13,9 +23,10 @@ function useMobile() {
   return mobile;
 }
 
-export default function LyricsPanel({ track, trackNumber, currentTime, duration, playing, audioRef, analysisRef, lyricsVersion }) {
+export default function LyricsPanel({ track, trackNumber, currentTime, duration, playing, audioRef, analysisRef, lyricsVersion, onSeek }) {
   const [rows, setRows] = useState([]);
   const [state, setState] = useState('loading');
+  const [showTranslation, setShowTranslation] = useState(readTranslationPref);
   const mobile = useMobile();
 
   useEffect(() => {
@@ -95,10 +106,20 @@ export default function LyricsPanel({ track, trackNumber, currentTime, duration,
   }, [activeIndex, visibleRows, mobile]);
 
   const providerName = track.provider === 'qq' ? 'QQ 音乐'
-    : track.provider === 'netease' ? '网易云音乐' : track.provider === 'kugou' ? '酷狗音乐' : '本地 LRC';
+    : track.provider === 'netease' ? '网易云音乐' : track.provider === 'kugou' ? '酷狗音乐' : track.provider === 'local' ? '本地文件' : '本地 LRC';
   const wordSynced = rows.some(row => row.wordLines.some(Boolean));
+  const hasTranslations = rows.some(row => row.translations?.length > 0);
   const source = state === 'ready' ? `${providerName} · ${wordSynced ? '逐字歌词' : '逐行歌词'}`
     : state === 'loading' ? '正在载入同步歌词' : state === 'missing' ? '暂无同步歌词' : '同步歌词读取失败';
+
+  const toggleTranslation = event => {
+    event.stopPropagation();
+    setShowTranslation(previous => {
+      const next = !previous;
+      try { localStorage.setItem(TRANSLATION_PREF_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   return (
     <div className={`intro ${playing ? 'is-playing' : ''}`} id="lyrics-panel" aria-live="polite">
@@ -110,21 +131,50 @@ export default function LyricsPanel({ track, trackNumber, currentTime, duration,
           </div>
           {visibleRows.map((row, index) => (
             <div
-              className={`lyric-row ${row.meta ? 'meta' : ''} ${index === activeIndex ? 'active' : ''} ${Math.abs(index - activeIndex) === 1 ? 'near' : ''}`}
+              className={`lyric-row ${row.meta ? 'meta' : ''} ${index === activeIndex ? 'active' : ''} ${Math.abs(index - activeIndex) === 1 ? 'near' : ''} ${onSeek ? 'seekable' : ''}`}
               key={`${row.time}-${index}`}
               ref={element => { rowRefs.current[index] = element; }}
+              role={onSeek ? 'button' : undefined}
+              tabIndex={onSeek ? 0 : undefined}
+              title={onSeek ? `点击跳转到 ${formatTime(Math.max(0, row.time))}` : undefined}
+              onPointerDown={event => { if (onSeek) event.stopPropagation(); }}
+              onClick={event => {
+                if (!onSeek) return;
+                event.stopPropagation();
+                onSeek(Math.max(0, row.time));
+              }}
+              onKeyDown={event => {
+                if (!onSeek) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onSeek(Math.max(0, row.time));
+                }
+              }}
             >
               {row.lines.map((text, lineIndex) => (
                 <LrcLine key={lineIndex} text={text} words={row.wordLines[lineIndex]}
                   active={index === activeIndex} playing={playing} currentTime={currentTime}
                   audioRef={audioRef} analysisRef={analysisRef} />
               ))}
-              {row.translations.map((text, lineIndex) => <span className="lyric-translation" key={lineIndex}>{text}</span>)}
+              {showTranslation && row.translations.map((text, lineIndex) => <span className="lyric-translation" key={lineIndex}>{text}</span>)}
             </div>
           ))}
         </div>
       </div>
-      <span className="lyrics-note">{playing ? `${source} · ${formatTime(currentTime)} / ${formatTime(duration)}` : source}</span>
+      <div className="lyrics-meta-bar">
+        <span className="lyrics-note">{playing ? `${source} · ${formatTime(currentTime)} / ${formatTime(duration)}` : source}</span>
+        {hasTranslations && (
+          <button
+            type="button"
+            className={`lyrics-trans-toggle ${showTranslation ? 'on' : ''}`}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={toggleTranslation}
+            aria-pressed={showTranslation}
+            title={showTranslation ? '隐藏译文歌词' : '显示双语译文'}
+          >译</button>
+        )}
+      </div>
     </div>
   );
 }
